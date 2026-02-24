@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vastly"
-version = "0.2.0"
+version = "0.2.1"
 description = "Connect to Vast.ai GPU instances -- sync SSH configs, set up your project, and open your IDE."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -25,8 +25,8 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/seamusfallows/vastly"
-Issues = "https://github.com/seamusfallows/vastly/issues"
+Repository = "https://github.com/seamus-fallows/vastly"
+Issues = "https://github.com/seamus-fallows/vastly/issues"
 
 [project.scripts]
 vst = "vastly.cli:main"

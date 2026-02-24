@@ -112,7 +112,7 @@ def main() -> None:
         epilog=(
             "prerequisites: vastai CLI (pip install vastai), git, ssh, VS Code or Cursor\n"
             "config:        ~/.vastly.json (created on first run)\n"
-            "docs:          https://github.com/seamusfallows/vastly"
+            "docs:          https://github.com/seamus-fallows/vastly"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
