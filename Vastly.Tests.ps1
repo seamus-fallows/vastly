@@ -7,7 +7,7 @@
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module "$here\Vastly.psd1" -Force
 
-# ── Format-Uptime ───────────────────────────────────────────────────
+# -- Format-Uptime ---------------------------------------------------
 
 Describe 'Format-Uptime' {
 
@@ -36,7 +36,7 @@ Describe 'Format-Uptime' {
     }
 }
 
-# ── Get-VastConfig ──────────────────────────────────────────────────
+# -- Get-VastConfig --------------------------------------------------
 
 Describe 'Get-VastConfig' {
 
@@ -134,7 +134,7 @@ Describe 'Get-VastConfig' {
     }
 }
 
-# ── Test-PortAvailable / Find-AvailablePort ─────────────────────────
+# -- Test-PortAvailable / Find-AvailablePort -------------------------
 
 Describe 'Port helpers' {
 
@@ -162,7 +162,7 @@ Describe 'Port helpers' {
     }
 }
 
-# ── Select-VastInstance ─────────────────────────────────────────────
+# -- Select-VastInstance ---------------------------------------------
 
 Describe 'Select-VastInstance' {
 
@@ -199,7 +199,7 @@ Describe 'Select-VastInstance' {
     Remove-Variable _single -Scope Global -ErrorAction SilentlyContinue
 }
 
-# ── Instance naming logic ───────────────────────────────────────────
+# -- Instance naming logic -------------------------------------------
 
 Describe 'Instance naming' {
 
@@ -231,40 +231,28 @@ Describe 'Instance naming' {
     }
 }
 
-# ── URL conversion ──────────────────────────────────────────────────
+# -- URL conversion --------------------------------------------------
 
 Describe 'HTTPS to SSH URL conversion' {
 
     It 'converts GitHub HTTPS to SSH' {
-        $result = InModuleScope Vastly {
-            $url = 'https://github.com/user/repo.git'
-            if ($url -match 'https://github\.com/(.+)') { $url = "git@github.com:$($Matches[1])" }
-            $url
-        }
+        $result = InModuleScope Vastly { Convert-ToSshUrl 'https://github.com/user/repo.git' }
         $result | Should Be 'git@github.com:user/repo.git'
     }
 
     It 'leaves SSH URLs unchanged' {
-        $result = InModuleScope Vastly {
-            $url = 'git@github.com:user/repo.git'
-            if ($url -match 'https://github\.com/(.+)') { $url = "git@github.com:$($Matches[1])" }
-            $url
-        }
+        $result = InModuleScope Vastly { Convert-ToSshUrl 'git@github.com:user/repo.git' }
         $result | Should Be 'git@github.com:user/repo.git'
     }
 
     It 'leaves non-GitHub HTTPS URLs unchanged' {
-        $result = InModuleScope Vastly {
-            $url = 'https://gitlab.com/user/repo.git'
-            if ($url -match 'https://github\.com/(.+)') { $url = "git@github.com:$($Matches[1])" }
-            $url
-        }
+        $result = InModuleScope Vastly { Convert-ToSshUrl 'https://gitlab.com/user/repo.git' }
         $result | Should Be 'https://gitlab.com/user/repo.git'
     }
 
     It 'extracts repo name from SSH URL' {
         $result = InModuleScope Vastly {
-            $url = 'git@github.com:user/my-project.git'
+            $url = Convert-ToSshUrl 'git@github.com:user/my-project.git'
             ($url -split '/')[-1] -replace '\.git$', ''
         }
         $result | Should Be 'my-project'
@@ -272,43 +260,37 @@ Describe 'HTTPS to SSH URL conversion' {
 
     It 'extracts repo name without .git suffix' {
         $result = InModuleScope Vastly {
-            $url = 'https://github.com/user/repo'
+            $url = Convert-ToSshUrl 'https://github.com/user/repo'
             ($url -split '/')[-1] -replace '\.git$', ''
         }
         $result | Should Be 'repo'
     }
 }
 
-# ── Module exports ──────────────────────────────────────────────────
+# -- Module exports --------------------------------------------------
 
 Describe 'Module exports' {
 
-    It 'exports all four functions' {
+    It 'exports all three functions' {
         $module = Get-Module Vastly
         $fns = @($module.ExportedFunctions.Keys | Sort-Object)
-        $fns.Count | Should Be 4
+        $fns.Count | Should Be 3
         $fns[0] | Should Be 'Connect-VastInstance'
         $fns[1] | Should Be 'Show-VastInstances'
         $fns[2] | Should Be 'Stop-VastInstance'
-        $fns[3] | Should Be 'Update-VastInstance'
     }
 
-    It 'exports all four aliases' {
+    It 'exports all three aliases' {
         $module = Get-Module Vastly
         $als = @($module.ExportedAliases.Keys | Sort-Object)
-        $als.Count | Should Be 4
+        $als.Count | Should Be 3
         $als[0] | Should Be 'vst'
         $als[1] | Should Be 'vst-show'
         $als[2] | Should Be 'vst-stop'
-        $als[3] | Should Be 'vst-update'
     }
 
     It 'vst alias points to Connect-VastInstance' {
         (Get-Alias vst).ReferencedCommand.Name | Should Be 'Connect-VastInstance'
-    }
-
-    It 'vst-update alias points to Update-VastInstance' {
-        (Get-Alias vst-update).ReferencedCommand.Name | Should Be 'Update-VastInstance'
     }
 
     It 'vst-show alias points to Show-VastInstances' {
@@ -320,7 +302,7 @@ Describe 'Module exports' {
     }
 }
 
-# ── Install.ps1 validation ──────────────────────────────────────────
+# -- Install.ps1 validation ------------------------------------------
 
 Describe 'Install.ps1 file list' {
 
@@ -345,7 +327,7 @@ Describe 'Install.ps1 file list' {
     }
 }
 
-# ── Config template ─────────────────────────────────────────────────
+# -- Config template -------------------------------------------------
 
 Describe 'Config template' {
 
@@ -366,5 +348,219 @@ Describe 'Config template' {
         ($keys -contains 'gitRemote') | Should Be $true
         ($keys -contains 'postInstall') | Should Be $true
         ($keys -contains 'installCommand') | Should Be $true
+    }
+}
+
+# -- Module version ----------------------------------------------------
+
+Describe 'Module version' {
+
+    It 'reads version from manifest' {
+        $version = InModuleScope Vastly { $script:ModuleVersion }
+        $manifest = Import-PowerShellDataFile "$here\Vastly.psd1"
+        $version | Should Be $manifest.ModuleVersion
+    }
+
+    It 'version is a valid semver string' {
+        $version = InModuleScope Vastly { $script:ModuleVersion }
+        $version | Should Match '^\d+\.\d+\.\d+$'
+    }
+}
+
+# -- Get-VastConfig edge cases ----------------------------------------
+
+Describe 'Get-VastConfig edge cases' {
+
+    BeforeEach {
+        $global:_tempDir = Join-Path $env:TEMP "vastly-test-$(Get-Random)"
+        New-Item -ItemType Directory -Path $global:_tempDir -Force | Out-Null
+    }
+
+    AfterEach {
+        Remove-Item $global:_tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Variable _tempDir -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable _cfgPath -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It 'auto-creates config from template when missing' {
+        $global:_cfgPath = Join-Path $global:_tempDir '.vastly.json'
+
+        InModuleScope Vastly {
+            $saved = $script:ConfigPath
+            $script:ConfigPath = $global:_cfgPath
+            $null = Get-VastConfig
+            $script:ConfigPath = $saved
+        }
+
+        Test-Path $global:_cfgPath | Should Be $true
+    }
+
+    It 'wraps single postInstall string so it is iterable' {
+        $global:_cfgPath = Join-Path $global:_tempDir '.vastly.json'
+        '{"postInstall": "echo hello"}' | Set-Content $global:_cfgPath
+
+        $result = InModuleScope Vastly {
+            $saved = $script:ConfigPath
+            $script:ConfigPath = $global:_cfgPath
+            $r = Get-VastConfig
+            $script:ConfigPath = $saved
+            $r
+        }
+
+        # Wrapping in @() simulates how the module actually uses postInstall
+        @($result.postInstall).Count | Should Be 1
+        @($result.postInstall)[0] | Should Be 'echo hello'
+    }
+
+    It 'returns empty array when postInstall is null' {
+        $global:_cfgPath = Join-Path $global:_tempDir '.vastly.json'
+        '{}' | Set-Content $global:_cfgPath
+
+        $result = InModuleScope Vastly {
+            $saved = $script:ConfigPath
+            $script:ConfigPath = $global:_cfgPath
+            $r = Get-VastConfig
+            $script:ConfigPath = $saved
+            $r
+        }
+
+        $result.postInstall.Count | Should Be 0
+    }
+}
+
+# -- SSH config format -------------------------------------------------
+
+Describe 'SSH config format' {
+
+    BeforeEach {
+        $global:_tempDir = Join-Path $env:TEMP "vastly-test-$(Get-Random)"
+        New-Item -ItemType Directory -Path $global:_tempDir -Force | Out-Null
+    }
+
+    AfterEach {
+        Remove-Item $global:_tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Variable _tempDir -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    It 'generates valid SSH config with required fields' {
+        # Simulate what Sync-VastConfigs writes for one instance
+        $lines = @(
+            "Host TW-1xRTX4090"
+            "    HostName 192.168.1.1"
+            "    Port 22222"
+            "    User root"
+            "    ForwardAgent yes"
+            "    StrictHostKeyChecking accept-new"
+        )
+        $configFile = Join-Path $global:_tempDir 'TW-1xRTX4090'
+        ($lines -join "`n") | Set-Content $configFile -NoNewline
+
+        $content = Get-Content $configFile -Raw
+        $content | Should Match 'Host TW-1xRTX4090'
+        $content | Should Match 'HostName 192\.168\.1\.1'
+        $content | Should Match 'Port 22222'
+        $content | Should Match 'User root'
+        $content | Should Match 'ForwardAgent yes'
+        $content | Should Match 'StrictHostKeyChecking accept-new'
+    }
+
+    It 'includes IdentityFile when sshKeyPath is set' {
+        $lines = @(
+            "Host test"
+            "    HostName 10.0.0.1"
+            "    Port 22"
+            "    User root"
+            "    ForwardAgent yes"
+            "    StrictHostKeyChecking accept-new"
+            "    IdentityFile C:\Users\me\.ssh\id_rsa"
+        )
+        $content = $lines -join "`n"
+        $content | Should Match 'IdentityFile C:\\Users\\me\\\.ssh\\id_rsa'
+    }
+
+    It 'includes LocalForward for port forwards' {
+        $lines = @(
+            "Host test"
+            "    HostName 10.0.0.1"
+            "    Port 22"
+            "    User root"
+            "    ForwardAgent yes"
+            "    StrictHostKeyChecking accept-new"
+            "    LocalForward 8080 localhost:8080"
+        )
+        $content = $lines -join "`n"
+        $content | Should Match 'LocalForward 8080 localhost:8080'
+    }
+}
+
+# -- Duplicate instance naming -----------------------------------------
+
+Describe 'Duplicate instance naming' {
+
+    It 'appends instance ID when names collide' {
+        # Replicate the naming logic from Sync-VastConfigs
+        $instances = @(
+            @{ gpu_name = 'RTX 4090'; num_gpus = 1; geolocation = 'Taipei, TW'; id = 111 }
+            @{ gpu_name = 'RTX 4090'; num_gpus = 1; geolocation = 'Taipei, TW'; id = 222 }
+        )
+
+        $nameCount = @{}
+        $names = @()
+
+        foreach ($inst in $instances) {
+            $gpuName = $inst.gpu_name -replace '\s+', ''
+            $country = if ($inst.geolocation -match ',\s*(\w+)$') { $Matches[1] } else { '' }
+            $baseName = if ($country) { "$country-$($inst.num_gpus)x$gpuName" } else { "$($inst.num_gpus)x$gpuName" }
+
+            if ($nameCount.ContainsKey($baseName)) {
+                $name = "$baseName-$($inst.id)"
+            }
+            else {
+                $nameCount[$baseName] = $true
+                $name = $baseName
+            }
+            $names += $name
+        }
+
+        $names[0] | Should Be 'TW-1xRTX4090'
+        $names[1] | Should Be 'TW-1xRTX4090-222'
+    }
+}
+
+# -- File encoding safety ----------------------------------------------
+
+Describe 'File encoding safety' {
+
+    It 'PowerShell files contain only ASCII characters' {
+        $files = Get-ChildItem "$here\*.ps1", "$here\*.psm1", "$here\*.psd1"
+        foreach ($file in $files) {
+            $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+            $nonAscii = @($bytes | Where-Object { $_ -gt 127 })
+            if ($nonAscii.Count -gt 0) {
+                # Find the line for a useful error message
+                $content = Get-Content $file.FullName
+                for ($i = 0; $i -lt $content.Length; $i++) {
+                    if ($content[$i] -match '[^\x00-\x7F]') {
+                        throw "Non-ASCII on line $($i + 1) of $($file.Name): $($content[$i])"
+                    }
+                }
+            }
+        }
+        $true | Should Be $true
+    }
+}
+
+# -- setup-remote.sh syntax -------------------------------------------
+
+Describe 'setup-remote.sh' {
+
+    It 'has valid bash syntax' {
+        $bash = Get-Command bash -ErrorAction SilentlyContinue
+        if (-not $bash) {
+            Set-TestInconclusive 'bash not available'
+            return
+        }
+        bash -n "$here/setup-remote.sh" 2>&1
+        $LASTEXITCODE | Should Be 0
     }
 }

@@ -20,7 +20,20 @@ shift 8
 POST_INSTALL_COMMANDS=("$@")
 
 REPO_DIR="${WORKSPACE}/${REPO_NAME}"
-BASHRC_MARKER="# vastly"
+BASHRC_MARKER="# vastly-managed"
+
+# ── Environment ──────────────────────────────────────────────────────────
+
+# Ensure ~/.local/bin is in PATH for the entire session (e.g., uv, claude)
+export PATH="$HOME/.local/bin:$PATH"
+
+# Suppress noisy pip warnings when running as root (expected on Vast.ai)
+export PIP_ROOT_USER_ACTION=ignore
+export PIP_PROGRESS_BAR=off
+
+# Disable fancy terminal features — progress bars / cursor movement garble
+# output when piped through SSH to a Windows terminal
+export TERM=dumb
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -67,7 +80,7 @@ fi
 # ── Step 5: Python environment detection ────────────────────────────────
 
 # Find the best Python interpreter available on this instance.
-detect_python() {
+setup_python() {
     # Prefer the venv python that many Vast images ship with
     if [[ -x /venv/main/bin/python ]]; then
         echo "/venv/main/bin/python"
@@ -101,7 +114,7 @@ detect_python() {
     fi
 }
 
-PYTHON_PATH="$(detect_python)"
+PYTHON_PATH="$(setup_python)"
 
 if [[ -z "$PYTHON_PATH" ]]; then
     warn "No Python interpreter found — skipping dependency install"
@@ -128,7 +141,6 @@ elif [[ -n "$PYTHON_PATH" ]]; then
         if ! command -v uv &>/dev/null; then
             log "Installing uv"
             curl -LsSf https://astral.sh/uv/install.sh | sh
-            export PATH="$HOME/.local/bin:$PATH"
         fi
         run_install "uv sync"
     elif [[ -f pyproject.toml ]] && grep -q '\[project\]' pyproject.toml 2>/dev/null; then
@@ -190,24 +202,27 @@ if [[ -f ~/.bashrc ]]; then
     sed -i "/${BASHRC_MARKER}/d" ~/.bashrc
 fi
 
-# Build the activation line based on what's available
-ACTIVATE_LINE=""
+# Build activation lines — conda and venv can coexist
+CONDA_LINE=""
+VENV_LINE=""
+
+# Always activate conda when available (so conda commands work)
+for conda_dir in /opt/conda /opt/miniforge3; do
+    if [[ -f "${conda_dir}/etc/profile.d/conda.sh" ]]; then
+        CONDA_LINE="source ${conda_dir}/etc/profile.d/conda.sh && conda activate main 2>/dev/null || conda activate base 2>/dev/null ${BASHRC_MARKER}"
+        break
+    fi
+done
+
+# Also activate venv if it exists (venv PATH takes priority over conda)
 if [[ -x /venv/main/bin/python ]]; then
-    # Vast images with /venv/main usually activate via PATH or source
-    ACTIVATE_LINE="export VIRTUAL_ENV=/venv/main; export PATH=\"/venv/main/bin:\$PATH\" ${BASHRC_MARKER}"
-else
-    # Try conda
-    for conda_dir in /opt/conda /opt/miniforge3; do
-        if [[ -f "${conda_dir}/etc/profile.d/conda.sh" ]]; then
-            ACTIVATE_LINE="source ${conda_dir}/etc/profile.d/conda.sh && conda activate main 2>/dev/null || conda activate base 2>/dev/null ${BASHRC_MARKER}"
-            break
-        fi
-    done
+    VENV_LINE="export VIRTUAL_ENV=/venv/main; export PATH=\"/venv/main/bin:\$PATH\" ${BASHRC_MARKER}"
 fi
 
 {
     echo "export PATH=\"\$HOME/.local/bin:\$PATH\" ${BASHRC_MARKER}"
-    [[ -n "$ACTIVATE_LINE" ]] && echo "$ACTIVATE_LINE"
+    [[ -n "$CONDA_LINE" ]] && echo "$CONDA_LINE"
+    [[ -n "$VENV_LINE" ]] && echo "$VENV_LINE"
     echo "cd ${REPO_DIR} ${BASHRC_MARKER}"
 } >> ~/.bashrc
 
@@ -221,19 +236,14 @@ if ! grep -q '\.bashrc' ~/.bash_profile 2>/dev/null; then
     echo "[ -f ~/.bashrc ] && . ~/.bashrc ${BASHRC_MARKER}" >> ~/.bash_profile
 fi
 
-# ── Step 11: .gitignore marker ──────────────────────────────────────────
+# ── Step 11: Write setup marker ───────────────────────────────────────
 
-if ! grep -q '\.vast-setup-done' .gitignore 2>/dev/null; then
-    log "Adding .vast-setup-done to .gitignore"
-    echo ".vast-setup-done" >> .gitignore
-fi
-
-# ── Step 12: Write setup marker ────────────────────────────────────────
-
+MARKER_DIR="$HOME/.vastly/setup"
 TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-log "Writing setup marker"
-cat > .vast-setup-done << MARKEREOF
+log "Writing setup marker to ${MARKER_DIR}/${REPO_NAME}.json"
+mkdir -p "$MARKER_DIR"
+cat > "${MARKER_DIR}/${REPO_NAME}.json" << MARKEREOF
 {
     "timestamp": "${TIMESTAMP}",
     "installMethod": "${INSTALL_METHOD}",

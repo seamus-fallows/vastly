@@ -4,9 +4,12 @@
 $script:ModuleVersion = (Import-PowerShellDataFile "$PSScriptRoot\Vastly.psd1").ModuleVersion
 $script:ConfigPath = Join-Path $env:USERPROFILE '.vastly.json'
 $script:SshConfigDir = Join-Path (Join-Path $env:USERPROFILE '.ssh') 'vast.d'
-$script:SshOpts = @('-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4')
+# Quick probes (echo ok, test -f, find): fail fast on dead connections
+$script:SshOpts = @('-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=5', '-o', 'ServerAliveCountMax=2')
+# Long-running commands (setup script): allow more time between keepalives
+$script:SshSetupOpts = @('-o', 'ConnectTimeout=10', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4')
 
-# ── Configuration ────────────────────────────────────────────────────
+# -- Configuration ----------------------------------------------------
 
 function Get-VastConfig {
     if (-not (Test-Path $script:ConfigPath)) {
@@ -35,10 +38,10 @@ function Get-VastConfig {
     }
 }
 
-# ── Prerequisites ────────────────────────────────────────────────────
+# -- Prerequisites ----------------------------------------------------
 
 function Test-VastPrerequisites {
-    param([switch]$NeedGit, [switch]$NeedIDE)
+    param([switch]$NeedIDE)
 
     $ok = $true
 
@@ -48,10 +51,6 @@ function Test-VastPrerequisites {
     }
     if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
         Write-Host "Missing: ssh. Should ship with Windows 10+." -ForegroundColor Red
-        $ok = $false
-    }
-    if ($NeedGit -and -not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Host "Missing: git. Install with: winget install Git.Git" -ForegroundColor Red
         $ok = $false
     }
     if ($NeedIDE) {
@@ -65,7 +64,7 @@ function Test-VastPrerequisites {
     $ok
 }
 
-# ── Port helpers ─────────────────────────────────────────────────────
+# -- Port helpers -----------------------------------------------------
 
 function Test-PortAvailable {
     param([int]$Port)
@@ -81,7 +80,7 @@ function Find-AvailablePort {
     $port
 }
 
-# ── SSH config sync ──────────────────────────────────────────────────
+# -- SSH config sync --------------------------------------------------
 
 function Sync-VastConfigs {
     $config = Get-VastConfig
@@ -189,7 +188,29 @@ function Sync-VastConfigs {
     ,$results
 }
 
-# ── Display & Selection ──────────────────────────────────────────────
+function Get-SyncedInstances {
+    $syncResult = Sync-VastConfigs
+    if ($null -eq $syncResult) {
+        Write-Host 'No running instances found and API unreachable.' -ForegroundColor Red
+        return $null
+    }
+    $instances = @($syncResult)
+    if ($instances.Count -eq 0) {
+        Write-Host 'No running Vast instances.' -ForegroundColor Yellow
+        return $null
+    }
+    $instances
+}
+
+function Convert-ToSshUrl {
+    param([string]$Url)
+    if ($Url -match 'https://github\.com/(.+)') {
+        return "git@github.com:$($Matches[1])"
+    }
+    $Url
+}
+
+# -- Display & Selection ----------------------------------------------
 
 function Format-Uptime {
     param($UnixTimestamp)
@@ -254,14 +275,13 @@ function Select-VastInstance {
     @($Instances[$choice - 1])
 }
 
-# ── Remote setup ─────────────────────────────────────────────────────
+# -- Remote setup -----------------------------------------------------
 
 function Invoke-VastRemoteSetup {
     param(
         [PSCustomObject[]]$Instances,
         [string]$RepoUrl,
-        [string]$RepoName,
-        [switch]$IgnoreMarker
+        [string]$RepoName
     )
 
     $config = Get-VastConfig
@@ -300,24 +320,22 @@ function Invoke-VastRemoteSetup {
         }
 
         if (-not $reachable) {
-            Write-Host 'unreachable, skipping.' -ForegroundColor Red
+            Write-Host 'unreachable after 3 attempts. Check vst-show to confirm it is running.' -ForegroundColor Red
             continue
         }
 
-        # Check setup marker (unless ignoring)
-        if (-not $IgnoreMarker) {
-            $marker = ssh $script:SshOpts $name "test -f $($config.workspace)/$RepoName/.vast-setup-done && echo done" 2>&1
-            if ($marker -eq 'done') {
-                Write-Host 'already set up.' -ForegroundColor Green
-                $successNames += $name
-                continue
-            }
+        # Check setup marker
+        $marker = ssh $script:SshOpts $name "test -f ~/.vastly/setup/${RepoName}.json && echo done" 2>&1
+        if ($marker -eq 'done') {
+            Write-Host 'already set up.' -ForegroundColor Green
+            $successNames += $name
+            continue
         }
 
         Write-Host 'running setup...' -ForegroundColor Cyan
 
         # SCP setup script and execute
-        scp $script:SshOpts "$setupScript" "${name}:/tmp/_vastly-setup.sh" 2>&1 | Out-Null
+        scp $script:SshSetupOpts "$setupScript" "${name}:/tmp/_vastly-setup.sh" 2>&1 | Out-Null
 
         # Build argument list
         $setupArgs = @(
@@ -328,8 +346,12 @@ function Invoke-VastRemoteSetup {
         $quotedArgs = $setupArgs | ForEach-Object { "'$($_ -replace "'", "'\\''")'" }
         $argString = $quotedArgs -join ' '
 
-        ssh $script:SshOpts $name "sed -i 's/\r$//' /tmp/_vastly-setup.sh && bash /tmp/_vastly-setup.sh $argString; e=`$?; rm -f /tmp/_vastly-setup.sh; exit `$e" 2>&1 |
+        # SSH outputs UTF-8; tell PowerShell to decode it correctly
+        $savedEncoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+        ssh $script:SshSetupOpts $name "sed -i 's/\r$//' /tmp/_vastly-setup.sh && bash /tmp/_vastly-setup.sh $argString; e=`$?; rm -f /tmp/_vastly-setup.sh; exit `$e" 2>&1 |
             ForEach-Object { Write-Host "    $_" }
+        [Console]::OutputEncoding = $savedEncoding
 
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  ${name}: setup failed (exit $LASTEXITCODE)" -ForegroundColor Red
@@ -343,7 +365,7 @@ function Invoke-VastRemoteSetup {
     $successNames
 }
 
-# ── Public commands ──────────────────────────────────────────────────
+# -- Public commands --------------------------------------------------
 
 function Connect-VastInstance {
     <#
@@ -352,23 +374,15 @@ function Connect-VastInstance {
     #>
     param(
         [Parameter(Position = 0)]
-        [string]$Name
+        [string]$Name,
+        [switch]$NoSetup
     )
 
-    if (-not (Test-VastPrerequisites -NeedGit -NeedIDE)) { return }
+    if (-not (Test-VastPrerequisites -NeedIDE)) { return }
 
     $config = Get-VastConfig
-    $syncResult = Sync-VastConfigs
-
-    if ($null -eq $syncResult) {
-        Write-Host 'No running instances found and API unreachable.' -ForegroundColor Red
-        return
-    }
-    $instances = @($syncResult)
-    if ($instances.Count -eq 0) {
-        Write-Host 'No running Vast instances.' -ForegroundColor Yellow
-        return
-    }
+    $instances = Get-SyncedInstances
+    if (-not $instances) { return }
 
     Show-InstanceTable $instances
 
@@ -382,7 +396,7 @@ function Connect-VastInstance {
         # List non-hidden directories in workspace
         $dirs = ssh $script:SshOpts $instName "find $($config.workspace) -mindepth 1 -maxdepth 1 -type d -not -name '.*' -printf '%f\n'" 2>$null
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "  ${instName}: unreachable via SSH, skipping." -ForegroundColor Red
+            Write-Host "  ${instName}: unreachable via SSH. Check vst-show to confirm it is running." -ForegroundColor Red
             continue
         }
         $dirList = @($dirs | Where-Object { $_ })
@@ -410,80 +424,29 @@ function Connect-VastInstance {
             & $config.ide --remote "ssh-remote+$instName" $remotePath
         }
         else {
-            # No projects - offer setup if in a git repo
-            $repoUrl = git remote get-url $config.gitRemote 2>$null
-            if ($repoUrl) {
-                # Convert HTTPS GitHub URLs to SSH for ForwardAgent
-                if ($repoUrl -match 'https://github\.com/(.+)') {
-                    $repoUrl = "git@github.com:$($Matches[1])"
-                }
-                $repoName = ($repoUrl -split '/')[-1] -replace '\.git$', ''
-
-                Write-Host "  No project found. Set up $repoName? [Y/n] " -NoNewline -ForegroundColor Yellow
-                $confirm = Read-Host
-                if ($confirm -match '^[Nn]') {
-                    & $config.ide --remote "ssh-remote+$instName" $config.workspace
-                    continue
-                }
-
-                $success = Invoke-VastRemoteSetup -Instances @($inst) -RepoUrl $repoUrl -RepoName $repoName
-                if ($success) {
-                    & $config.ide --remote "ssh-remote+$instName" "$($config.workspace)/$repoName"
-                }
+            # No projects found on remote
+            if ($NoSetup) {
+                Write-Host "  Opening $($config.workspace)" -ForegroundColor Green
+                & $config.ide --remote "ssh-remote+$instName" $config.workspace
+                continue
             }
-            else {
+
+            $repoUrl = git remote get-url $config.gitRemote 2>$null
+            if (-not $repoUrl) {
                 Write-Host "  No projects on remote and not in a local git repo." -ForegroundColor Yellow
                 Write-Host "  Opening $($config.workspace). Tip: run vst from inside a git repo to auto-setup." -ForegroundColor Gray
                 & $config.ide --remote "ssh-remote+$instName" $config.workspace
+                continue
+            }
+
+            $repoUrl = Convert-ToSshUrl $repoUrl
+            $repoName = ($repoUrl -split '/')[-1] -replace '\.git$', ''
+
+            $success = Invoke-VastRemoteSetup -Instances @($inst) -RepoUrl $repoUrl -RepoName $repoName
+            if ($success) {
+                & $config.ide --remote "ssh-remote+$instName" "$($config.workspace)/$repoName"
             }
         }
-    }
-}
-
-function Update-VastInstance {
-    <#
-    .SYNOPSIS
-    Re-pull repo, re-install deps, and re-run post-install on Vast instances.
-    #>
-    param(
-        [Parameter(Position = 0)]
-        [string]$Name
-    )
-
-    if (-not (Test-VastPrerequisites -NeedGit -NeedIDE)) { return }
-
-    $config = Get-VastConfig
-
-    # Must be in a git repo
-    $repoUrl = git remote get-url $config.gitRemote 2>$null
-    if (-not $repoUrl) {
-        Write-Host 'Not in a git repo - run this from your project directory.' -ForegroundColor Red
-        return
-    }
-    if ($repoUrl -match 'https://github\.com/(.+)') {
-        $repoUrl = "git@github.com:$($Matches[1])"
-    }
-    $repoName = ($repoUrl -split '/')[-1] -replace '\.git$', ''
-
-    $syncResult = Sync-VastConfigs
-    if ($null -eq $syncResult) {
-        Write-Host 'No running instances found and API unreachable.' -ForegroundColor Red
-        return
-    }
-    $instances = @($syncResult)
-    if ($instances.Count -eq 0) {
-        Write-Host 'No running Vast instances.' -ForegroundColor Yellow
-        return
-    }
-
-    Show-InstanceTable $instances
-
-    $selected = Select-VastInstance -Instances $instances -Name $Name -Prompt 'Select instances to update:' -AllowMultiple
-    if ($selected.Count -eq 0) { return }
-
-    $success = Invoke-VastRemoteSetup -Instances $selected -RepoUrl $repoUrl -RepoName $repoName -IgnoreMarker
-    foreach ($name in $success) {
-        & $config.ide --remote "ssh-remote+$name" "$($config.workspace)/$repoName"
     }
 }
 
@@ -495,16 +458,8 @@ function Show-VastInstances {
 
     if (-not (Test-VastPrerequisites)) { return }
 
-    $syncResult = Sync-VastConfigs
-    if ($null -eq $syncResult) {
-        Write-Host 'Failed to reach Vast API and no cached configs.' -ForegroundColor Red
-        return
-    }
-    $instances = @($syncResult)
-    if ($instances.Count -eq 0) {
-        Write-Host 'No running Vast instances.' -ForegroundColor Yellow
-        return
-    }
+    $instances = Get-SyncedInstances
+    if (-not $instances) { return }
 
     # Table header
     $fmt = '{0,-25} {1,-20} {2,10} {3,10}'
@@ -527,25 +482,18 @@ function Show-VastInstances {
 function Stop-VastInstance {
     <#
     .SYNOPSIS
-    Destroy Vast.ai instance(s) after confirmation.
+    Stop Vast.ai instance(s) after confirmation.
     #>
     param(
         [Parameter(Position = 0)]
-        [string]$Name
+        [string]$Name,
+        [switch]$Destroy
     )
 
     if (-not (Test-VastPrerequisites)) { return }
 
-    $syncResult = Sync-VastConfigs
-    if ($null -eq $syncResult) {
-        Write-Host 'No running instances found and API unreachable.' -ForegroundColor Red
-        return
-    }
-    $instances = @($syncResult)
-    if ($instances.Count -eq 0) {
-        Write-Host 'No running Vast instances.' -ForegroundColor Yellow
-        return
-    }
+    $instances = Get-SyncedInstances
+    if (-not $instances) { return }
 
     Show-InstanceTable $instances
 
@@ -553,8 +501,9 @@ function Stop-VastInstance {
     if ($selected.Count -eq 0) { return }
 
     # Confirmation
+    $action = if ($Destroy) { 'Destroy' } else { 'Stop' }
     $nameList = ($selected | ForEach-Object { $_.Name }) -join ', '
-    Write-Host "Destroy ${nameList}? [y/N] " -NoNewline -ForegroundColor Yellow
+    Write-Host "$action ${nameList}? [y/N] " -NoNewline -ForegroundColor Yellow
     $confirm = Read-Host
     if ($confirm -notmatch '^[Yy]') {
         Write-Host 'Cancelled.'
@@ -566,8 +515,10 @@ function Stop-VastInstance {
             Write-Host "  $($inst.Name): skipped (no instance ID - cached config)" -ForegroundColor Yellow
             continue
         }
-        Write-Host "  $($inst.Name): destroying..." -NoNewline
-        vastai destroy instance $inst.Id 2>&1 | Out-Null
+        $verb = if ($Destroy) { 'destroying' } else { 'stopping' }
+        Write-Host "  $($inst.Name): ${verb}..." -NoNewline
+        $cmd = if ($Destroy) { 'destroy' } else { 'stop' }
+        vastai $cmd instance $inst.Id 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
             Write-Host ' done.' -ForegroundColor Green
             $configFile = Join-Path $script:SshConfigDir $inst.Name
@@ -579,14 +530,13 @@ function Stop-VastInstance {
     }
 }
 
-# ── Aliases & Tab Completion ─────────────────────────────────────────
+# -- Aliases & Tab Completion -----------------------------------------
 
 Set-Alias -Name vst -Value Connect-VastInstance
-Set-Alias -Name vst-update -Value Update-VastInstance
 Set-Alias -Name vst-show -Value Show-VastInstances
 Set-Alias -Name vst-stop -Value Stop-VastInstance
 
-Register-ArgumentCompleter -CommandName Connect-VastInstance, Update-VastInstance, Stop-VastInstance -ParameterName Name -ScriptBlock {
+Register-ArgumentCompleter -CommandName Connect-VastInstance, Stop-VastInstance -ParameterName Name -ScriptBlock {
     param($commandName, $parameterName, $wordToComplete)
     $dir = Join-Path (Join-Path $env:USERPROFILE '.ssh') 'vast.d'
     Get-ChildItem $dir -ErrorAction SilentlyContinue |
@@ -596,4 +546,4 @@ Register-ArgumentCompleter -CommandName Connect-VastInstance, Update-VastInstanc
         }
 }
 
-Export-ModuleMember -Function Connect-VastInstance, Update-VastInstance, Show-VastInstances, Stop-VastInstance -Alias vst, vst-update, vst-show, vst-stop
+Export-ModuleMember -Function Connect-VastInstance, Show-VastInstances, Stop-VastInstance -Alias vst, vst-show, vst-stop

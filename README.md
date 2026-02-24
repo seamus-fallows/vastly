@@ -46,17 +46,17 @@ US-2xA100                 2x A100                  $1.44       0.5h
 **Tear down:**
 
 ```powershell
-vst-stop               # select and destroy instances (with confirmation)
+vst-stop               # select and stop instances (with confirmation)
 ```
 
 ## Commands
 
-| Command             | Description                                                 |
-| ------------------- | ----------------------------------------------------------- |
-| `vst [name]`        | Sync instances, detect projects, set up if needed, open IDE |
-| `vst-update [name]` | Re-pull repo, re-install deps, re-run post-install          |
-| `vst-show`          | Display live instance info (name, GPU, cost, uptime)        |
-| `vst-stop [name]`   | Destroy instance(s) with confirmation                       |
+| Command                | Description                                                              |
+| ---------------------- | ------------------------------------------------------------------------ |
+| `vst [name]`           | Sync instances, detect projects, set up if needed, open IDE              |
+| `vst -NoSetup [name]`  | Open IDE on an instance without cloning or installing anything           |
+| `vst-show`             | Display live instance info (name, GPU, cost, uptime)                     |
+| `vst-stop [name]`      | Stop instance(s) with confirmation (`-Destroy` to terminate permanently) |
 
 All commands support tab-completion on instance names.
 
@@ -108,7 +108,7 @@ Edit `~/.vastly.json` (created on first run):
 3. **Setup** — If no project found, clones your repo, installs Python deps, configures the shell
 4. **Open** — Launches your IDE via Remote-SSH
 
-The setup step auto-detects your Python install method (`uv sync`, `pip install`, etc.) and runs any post-install commands you've configured. A `.vast-setup-done` marker prevents redundant setup on subsequent connections.
+The setup step auto-detects your Python install method (`uv sync`, `pip install`, etc.) and runs any post-install commands you've configured. A marker at `~/.vastly/setup/<repo>.json` on the remote prevents redundant setup on subsequent connections.
 
 ## Updating
 
@@ -128,4 +128,4 @@ The installer is idempotent — module files are overwritten, but your config is
 
 **Port already in use** — Another service is using the configured local port. Vastly auto-increments ports, but you can change the base port in `portForwards` or set it to `[]` to disable forwarding.
 
-**"Not in a git repo"** — `vst` and `vst-update` need to be run from inside a git repo so they know which project to set up remotely.
+**"Not in a git repo"** — `vst` needs to be run from inside a git repo so it knows which project to set up remotely. Use `vst -NoSetup` to skip this requirement.

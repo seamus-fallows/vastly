@@ -91,7 +91,7 @@ else {
 # --- Step 3: Create default config if missing ---
 Write-Host ''
 if (Test-Path $ConfigPath) {
-    Write-Host "  Config already exists at $ConfigPath — not modified."
+    Write-Host "  Config already exists at $ConfigPath -- not modified."
 }
 elseif (Test-Path $TemplatePath) {
     Copy-Item -Path $TemplatePath -Destination $ConfigPath
@@ -99,7 +99,7 @@ elseif (Test-Path $TemplatePath) {
     Write-Host '  Edit this file to set your IDE, SSH key, port forwards, etc.'
 }
 else {
-    Write-Warning "  Template not found at $TemplatePath — skipping config creation."
+    Write-Warning "  Template not found at $TemplatePath -- skipping config creation."
 }
 
 # --- Done ---
