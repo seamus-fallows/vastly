@@ -1,4 +1,4 @@
-"""Remote instance provisioning -- SCP setup script and execute."""
+"""Remote project setup -- SCP setup script and execute."""
 
 from __future__ import annotations
 

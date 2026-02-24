@@ -1,14 +1,14 @@
 # Vastly
 
-Manage Vast.ai GPU instances from your terminal -- sync SSH configs, provision remote dev environments, and open your IDE in one command.
+Connect to Vast.ai GPU instances from your terminal: sync SSH configs, set up your project remotely, and open your IDE in one command.
 
 ## Prerequisites
 
 - Python 3.9+
 - [Vast.ai CLI](https://vast.ai/docs/cli/getting-started) (`pip install vastai`) with API key configured
 - Git
-- SSH (ships with Windows 10+, macOS, and Linux)
-- VS Code or Cursor
+- SSH
+- [VS Code](https://code.visualstudio.com) or [Cursor](https://cursor.com) with the Remote-SSH extension
 
 ## Install
 
@@ -16,125 +16,105 @@ Manage Vast.ai GPU instances from your terminal -- sync SSH configs, provision r
 pip install vastly
 ```
 
-For development:
-
-```sh
-git clone https://github.com/seamusfallows/vastly.git
-cd vastly
-pip install -e .
-```
-
-## Quick Start
-
-**Connect to an instance:**
+## Usage
 
 ```sh
 cd your-project      # any local git repo
-vst                  # syncs instances -> detects projects -> opens IDE
+vst                  # checks setup -> opens IDE (sets up on first run)
 ```
-
-If the remote instance has no project yet, `vst` offers to clone your repo and install dependencies automatically.
-
-**Target a specific instance:**
 
 ```sh
-vst my-instance
+vst 1xRTX4090-TW    # target a specific instance by name
+vst --no-setup       # open IDE on the remote without cloning or installing anything
+vst --version        # show version
 ```
 
-**Skip setup (just open IDE):**
+## How It Works
 
-```sh
-vst --no-setup
-```
+### 1. Sync
 
-## Commands
+Calls the Vast.ai API and writes an SSH config for each running instance to `~/.ssh/vast.d/`. On first run, adds `Include vast.d/*` to `~/.ssh/config`.
 
-| Command              | Description                                                    |
-| -------------------- | -------------------------------------------------------------- |
-| `vst [name]`         | Sync instances, detect projects, set up if needed, open IDE    |
-| `vst --no-setup`     | Open IDE on an instance without cloning or installing anything |
-| `vst --version`      | Show version                                                   |
+Instances are named by GPU and region (e.g. `1xRTX4090-TW`, `2xA100-US`). Duplicates get the instance ID appended (`1xRTX4090-TW-12345`).
 
-To check instance status or stop instances, use the Vast.ai CLI directly:
+### 2. Select
 
-```sh
-vastai show instances
-vastai stop instance <id>
-vastai destroy instance <id>
-```
+One instance is selected automatically. Multiple instances prompt you to pick one or select all. You can also pass the name directly: `vst 1xRTX4090-TW`.
+
+### 3. Setup (first run only)
+
+For each selected instance, `vst` checks if the project has already been set up by looking for a marker file at `~/.vastly/setup/<repo>.json` on the instance. If the marker exists, it skips straight to opening the IDE.
+
+On first run (no marker), `vst` reads the remote URL from your local git repo, copies a setup script to the instance, and runs it.
+
+The setup script ([setup-remote.sh](src/vastly/data/setup-remote.sh)):
+
+- Disables auto-tmux (on by default, configurable)
+- Configures git identity from your local `git config`
+- Adds `github.com` to SSH known hosts
+- Clones your repo into the workspace
+- Installs Python dependencies (auto-detected)
+- Runs any configured post-install commands
+- Writes VS Code settings and patches `.bashrc`
+- Writes a setup marker (`~/.vastly/setup/<repo>.json`) so setup is skipped next time
+
+**Dependency auto-detection** (checked in order):
+
+1. `uv.lock` or `[tool.uv]` in pyproject.toml -- `uv sync` (installs uv if needed)
+2. `[project]` in pyproject.toml -- `pip install -e .`
+3. `requirements*.txt` -- `pip install -r` for each file
+4. `setup.py` -- `pip install -e .`
+
+Override with `installCommand` in your config.
+
+### 4. Open
+
+Launches your IDE via Remote-SSH at the project directory. If already open, focuses the existing window.
 
 ## Configuration
 
-Edit `~/.vastly.json` (created on first run):
+On first run, `vst` creates `~/.vastly.json` with defaults:
 
 ```jsonc
 {
-  // IDE to open -- "code" or "cursor"
+  // "code" (VS Code) or "cursor"
   "ide": "code",
 
-  // SSH key path. null = infer from ~/.ssh/config or ssh-agent
+  // Path to SSH private key. null = use your SSH config or ssh-agent
   "sshKeyPath": null,
 
   // SSH user on remote instances
   "sshUser": "root",
 
-  // Port forwarding: access remote services at localhost
+  // Ports to forward to localhost. Set to [] to disable
   // Local ports auto-increment when multiple instances are running
   "portForwards": [
     { "local": 8080, "remote": 8080 }
   ],
 
-  // Remote workspace root
+  // Remote directory where projects are cloned
   "workspace": "/workspace",
 
-  // Disable auto-tmux on remote instances
+  // Creates ~/.no_auto_tmux to prevent auto-tmux on Vast images
   "disableAutoTmux": true,
 
-  // Git remote to read repo URL from
+  // Which git remote to read the repo URL from
   "gitRemote": "origin",
 
   // Commands to run after dependency install
-  // Example: ["curl -fsSL https://claude.ai/install.sh | bash"]
+  // e.g. ["curl -fsSL https://claude.ai/install.sh | bash"]
   "postInstall": [],
 
-  // Override auto-detected Python install method
-  // Examples: "uv sync", "pip install -e '.[dev]'", "conda env update -f environment.yml"
-  // null = auto-detect
+  // Override auto-detected install method. null = auto-detect
+  // e.g. "uv sync", "pip install -e '.[dev]'", "conda env update -f environment.yml"
   "installCommand": null
 }
 ```
 
-## How It Works
-
-1. **Sync** -- Calls the Vast.ai API, writes SSH configs to `~/.ssh/vast.d/` (adds `Include vast.d/*` to `~/.ssh/config` on first run)
-2. **Detect** -- Checks what projects exist in `/workspace` on the remote instance
-3. **Setup** -- If no project found, clones your repo, installs Python deps, configures the shell
-4. **Open** -- Launches your IDE via Remote-SSH
-
-The setup step auto-detects your Python install method (`uv sync`, `pip install`, etc.) and runs any post-install commands you've configured. A marker at `~/.vastly/setup/<repo>.json` on the remote prevents redundant setup on subsequent connections.
-
-## Updating
-
-```sh
-pip install --upgrade vastly
-```
-
-If you installed from source:
-
-```sh
-cd vastly
-git pull
-pip install -e .
-```
-
-Your config (`~/.vastly.json`) is never touched by install or update.
-
 ## Troubleshooting
 
-**"Missing: vastai CLI"** -- Run `pip install vastai` and set your API key with `vastai set api-key <key>`.
+**"Missing: vastai CLI"** -- `pip install vastai`, then `vastai set api-key <key>`.
 
-**SSH connection timeout** -- The instance may still be booting. `vst` retries 3 times automatically. Run `vastai show instances` to confirm the instance is running.
+**SSH connection timeout** -- Instance may still be booting. Setup retries 3 times. Run `vastai show instances` to check status.
 
-**Port already in use** -- Another service is using the configured local port. Vastly auto-increments ports, but you can change the base port in `portForwards` or set it to `[]` to disable forwarding.
-
-**"Not in a git repo"** -- `vst` needs to be run from inside a git repo so it knows which project to set up remotely. Use `vst --no-setup` to skip this requirement.
+**"Not in a git repo"** -- `vst` reads the remote URL from your local repo. Run from inside a git repo, or use `--no-setup`.

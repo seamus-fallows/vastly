@@ -37,8 +37,24 @@ def _check_prerequisites(*, need_ide: bool = False, ide: str) -> bool:
     return ok
 
 
+def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
+    """Return (repo_url, repo_name) from the local git repo, or None."""
+    try:
+        repo_url = subprocess.run(
+            ["git", "remote", "get-url", git_remote],
+            capture_output=True, text=True,
+        ).stdout.strip()
+    except FileNotFoundError:
+        return None
+    if not repo_url:
+        return None
+    repo_url = convert_to_ssh_url(repo_url)
+    repo_name = repo_url.rsplit("/", 1)[-1].removesuffix(".git")
+    return repo_url, repo_name
+
+
 def _connect(name: str | None, no_setup: bool) -> None:
-    """Main connect flow -- sync instances, detect projects, setup if needed, open IDE."""
+    """Main connect flow -- sync instances, check setup, run setup if needed, open IDE."""
     config = load_config()
 
     if not _check_prerequisites(need_ide=True, ide=config["ide"]):
@@ -54,85 +70,45 @@ def _connect(name: str | None, no_setup: bool) -> None:
     if not selected:
         return
 
+    repo_info = _local_repo_info(config["gitRemote"])
+
     for inst in selected:
         inst_name = inst["name"]
-        print(f"\033[90mChecking {inst_name}...\033[0m")
 
-        # List non-hidden directories in workspace
-        result = run_ssh(
-            inst_name,
-            f"find {config['workspace']} -mindepth 1 -maxdepth 1 -type d -not -name '.*' -printf '%f\\n'",
-        )
-
-        if result.returncode != 0:
-            print(f"  \033[31m{inst_name}: unreachable via SSH. Check vastai show instances to confirm it is running.\033[0m")
+        if no_setup or not repo_info:
+            # Skip setup -- open workspace root
+            if not repo_info and not no_setup:
+                print(f"  \033[33mNot in a git repo. Tip: run vst from inside a git repo to auto-setup.\033[0m")
+            print(f"  \033[32mOpening {config['workspace']}\033[0m")
+            open_ide(config["ide"], inst_name, config["workspace"])
             continue
 
-        dir_list = [d for d in result.stdout.strip().splitlines() if d]
+        repo_url, repo_name = repo_info
+        remote_path = f"{config['workspace']}/{repo_name}"
 
-        if len(dir_list) == 1:
-            remote_path = f"{config['workspace']}/{dir_list[0]}"
+        # Check if project is already set up via marker file
+        result = run_ssh(inst_name, f"test -f ~/.vastly/setup/{repo_name}.json && echo done")
+
+        if result.returncode != 0:
+            print(f"  \033[31m{inst_name}: unreachable via SSH.\033[0m")
+            continue
+
+        if result.stdout.strip() == "done":
             print(f"  \033[32mOpening {remote_path}\033[0m")
             open_ide(config["ide"], inst_name, remote_path)
+            continue
 
-        elif len(dir_list) > 1:
-            print(f"  Multiple projects found on {inst_name}:")
-            for i, d in enumerate(dir_list):
-                print(f"    [{i + 1}] {d}")
-            print(f"    [0] Open {config['workspace']}")
-
-            try:
-                pick = input("  Choice: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                continue
-
-            if not pick.isdigit():
-                continue
-
-            pick = int(pick)
-            if pick == 0:
-                remote_path = config["workspace"]
-            elif 1 <= pick <= len(dir_list):
-                remote_path = f"{config['workspace']}/{dir_list[pick - 1]}"
-            else:
-                continue
-
+        # Not set up yet -- run setup
+        success = setup_instances([inst], repo_url, repo_name, config)
+        if success:
             open_ide(config["ide"], inst_name, remote_path)
-
-        else:
-            # No projects found on remote
-            if no_setup:
-                print(f"  \033[32mOpening {config['workspace']}\033[0m")
-                open_ide(config["ide"], inst_name, config["workspace"])
-                continue
-
-            try:
-                repo_url = subprocess.run(
-                    ["git", "remote", "get-url", config["gitRemote"]],
-                    capture_output=True, text=True,
-                ).stdout.strip()
-            except FileNotFoundError:
-                repo_url = ""
-
-            if not repo_url:
-                print(f"  \033[33mNo projects on remote and not in a local git repo.\033[0m")
-                print(f"  \033[90mOpening {config['workspace']}. Tip: run vst from inside a git repo to auto-setup.\033[0m")
-                open_ide(config["ide"], inst_name, config["workspace"])
-                continue
-
-            repo_url = convert_to_ssh_url(repo_url)
-            repo_name = repo_url.rsplit("/", 1)[-1].removesuffix(".git")
-
-            success = setup_instances([inst], repo_url, repo_name, config)
-            if success:
-                open_ide(config["ide"], inst_name, f"{config['workspace']}/{repo_name}")
 
 
 def main() -> None:
     """Parse arguments and run the connect flow."""
     parser = argparse.ArgumentParser(
         prog="vst",
-        description="Connect to a Vast.ai instance -- sync SSH, provision, and open your IDE.",
+        description="Connect to a Vast.ai instance -- sync SSH, set up your project, and open your IDE.",
         epilog=(
             "prerequisites: vastai CLI (pip install vastai), git, ssh, VS Code or Cursor\n"
             "config:        ~/.vastly.json (created on first run)\n"

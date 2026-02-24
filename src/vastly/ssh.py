@@ -30,8 +30,10 @@ def find_available_port(start: int, exclude: set[int] | None = None) -> int:
     """Find the first available port starting from *start*, skipping *exclude*."""
     exclude = exclude or set()
     port = start
-    while not is_port_available(port) or port in exclude:
+    while port <= 65535 and (not is_port_available(port) or port in exclude):
         port += 1
+    if port > 65535:
+        raise RuntimeError(f"No available port found starting from {start}")
     return port
 
 
@@ -80,7 +82,8 @@ def clear_ssh_configs() -> None:
     """Remove all files from ~/.ssh/vast.d/."""
     if SSH_CONFIG_DIR.exists():
         for f in SSH_CONFIG_DIR.iterdir():
-            f.unlink()
+            if f.is_file():
+                f.unlink()
 
 
 def cached_config_names() -> list[str]:

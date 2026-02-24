@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ── Vastly remote setup script ─────────────────────────────────────────
-# Standalone provisioning script for Vast.ai GPU instances.
+# Standalone setup script for Vast.ai GPU instances.
 # Receives config as positional arguments from the vastly CLI.
 # Safe to re-run (idempotent).
 
@@ -62,15 +62,14 @@ if ! grep -q "^github.com " ~/.ssh/known_hosts 2>/dev/null; then
     ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
 fi
 
-# ── Step 4: Clone or pull ──────────────────────────────────────────────
+# ── Step 4: Clone ──────────────────────────────────────────────────────
 
 mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
 
 if [[ -d "$REPO_NAME" ]]; then
-    log "Repo already exists, pulling latest"
+    log "Repo already exists, skipping clone"
     cd "$REPO_NAME"
-    git pull || warn "git pull failed -- continuing with existing code"
 else
     log "Cloning ${REPO_URL} into ${REPO_DIR}"
     git clone "$REPO_URL" "$REPO_NAME" || die "git clone failed"

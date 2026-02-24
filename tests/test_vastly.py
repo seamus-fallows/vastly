@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-import random
 import re
 import shutil
+import socket
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -139,58 +139,67 @@ class TestLoadConfig:
 
 class TestPortHelpers:
 
-    def test_is_port_available_on_unused_port(self):
-        port = random.randint(49152, 65535)
-        result = is_port_available(port)
-        assert isinstance(result, bool)
+    def test_detects_port_in_use(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+            assert not is_port_available(port)
 
-    def test_find_available_port_returns_start(self):
-        port = random.randint(49152, 65535)
-        result = find_available_port(port)
-        assert result >= port
+    def test_detects_port_available(self):
+        # Bind then release -- port should be available immediately after
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        assert is_port_available(port)
 
     def test_find_available_port_skips_excluded(self):
-        port = random.randint(49152, 65530)
-        exclude = {port, port + 1}
-        result = find_available_port(port, exclude)
-        assert result == port + 2
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        # Port is free, but excluded -- should skip to port + 1
+        result = find_available_port(port, {port})
+        assert result == port + 1
+
+    def test_find_available_port_raises_when_exhausted(self):
+        with pytest.raises(RuntimeError, match="No available port"):
+            find_available_port(65536)
 
 
 class TestSelectInstance:
 
     def test_returns_matching_by_name(self):
         instances = [
-            {"name": "TW-1xRTX3060", "id": 100},
-            {"name": "US-2xA100", "id": 200},
+            {"name": "1xRTX3060-TW", "id": 100},
+            {"name": "2xA100-US", "id": 200},
         ]
-        result = select_instance(instances, "US-2xA100")
+        result = select_instance(instances, "2xA100-US")
         assert len(result) == 1
-        assert result[0]["name"] == "US-2xA100"
+        assert result[0]["name"] == "2xA100-US"
 
     def test_returns_empty_for_bad_name(self):
         instances = [
-            {"name": "TW-1xRTX3060", "id": 100},
-            {"name": "US-2xA100", "id": 200},
+            {"name": "1xRTX3060-TW", "id": 100},
+            {"name": "2xA100-US", "id": 200},
         ]
         result = select_instance(instances, "NOPE")
         assert result == []
 
     def test_auto_selects_single_instance(self):
-        instances = [{"name": "TW-1xRTX3060", "id": 100}]
+        instances = [{"name": "1xRTX3060-TW", "id": 100}]
         result = select_instance(instances)
         assert len(result) == 1
-        assert result[0]["name"] == "TW-1xRTX3060"
+        assert result[0]["name"] == "1xRTX3060-TW"
 
     def test_select_all_returns_all_instances(self, monkeypatch):
         instances = [
-            {"name": "TW-1xRTX3060", "id": 100},
-            {"name": "US-2xA100", "id": 200},
+            {"name": "1xRTX3060-TW", "id": 100},
+            {"name": "2xA100-US", "id": 200},
         ]
         monkeypatch.setattr("builtins.input", lambda _: "a")
         result = select_instance(instances)
         assert len(result) == 2
-        assert result[0]["name"] == "TW-1xRTX3060"
-        assert result[1]["name"] == "US-2xA100"
+        assert result[0]["name"] == "1xRTX3060-TW"
+        assert result[1]["name"] == "2xA100-US"
 
 
 class TestInstanceNaming:
@@ -399,6 +408,16 @@ class TestSshConfigManagement:
         clear_ssh_configs()
 
         assert list(tmp_path.iterdir()) == []
+
+    def test_clear_skips_directories(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
+        (tmp_path / "host1").write_text("config1")
+        (tmp_path / "subdir").mkdir()
+
+        clear_ssh_configs()
+
+        remaining = [f.name for f in tmp_path.iterdir()]
+        assert remaining == ["subdir"]
 
     def test_cached_names_returns_file_names(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)

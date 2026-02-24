@@ -31,13 +31,17 @@ def fetch_instances() -> list[dict] | None:
             print("\033[31mvastai command failed. Is your API key set? Run: vastai set api-key <key>\033[0m")
         return None
     try:
-        return json.loads(result.stdout)
+        data = json.loads(result.stdout)
     except (json.JSONDecodeError, TypeError):
         return None
 
+    if not isinstance(data, list):
+        return None
+    return data
+
 
 def build_instance_name(inst: dict, seen: dict[str, bool]) -> str:
-    """Generate a human-readable name like 'TW-1xRTX4090'.
+    """Generate a human-readable name like '1xRTX4090-TW'.
 
     Appends the instance ID on collision.
     """
