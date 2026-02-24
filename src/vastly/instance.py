@@ -1,0 +1,208 @@
+"""Vast.ai instance fetching, naming, display, and selection."""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+from datetime import datetime, timezone
+
+from vastly.ssh import (
+    SSH_CONFIG_DIR,
+    cached_config_names,
+    clear_ssh_configs,
+    ensure_ssh_include,
+    find_available_port,
+    write_ssh_config,
+)
+
+
+def fetch_instances() -> list[dict] | None:
+    """Call vastai CLI and return list of running instances, or None on failure."""
+    result = subprocess.run(
+        ["vastai", "show", "instances", "--raw"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        if result.stderr.strip():
+            print(f"\033[31mvastai: {result.stderr.strip()}\033[0m")
+        else:
+            print("\033[31mvastai command failed. Is your API key set? Run: vastai set api-key <key>\033[0m")
+        return None
+    try:
+        return json.loads(result.stdout)
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def build_instance_name(inst: dict, seen: dict[str, bool]) -> str:
+    """Generate a human-readable name like 'TW-1xRTX4090'.
+
+    Appends the instance ID on collision.
+    """
+    gpu_name = re.sub(r"\s+", "", inst.get("gpu_name", ""))
+    num_gpus = inst.get("num_gpus", 1)
+    geo = inst.get("geolocation", "")
+
+    m = re.search(r",\s*(\w+)$", geo)
+    country = m.group(1) if m else ""
+
+    base = f"{num_gpus}x{gpu_name}-{country}" if country else f"{num_gpus}x{gpu_name}"
+
+    if base in seen:
+        name = f"{base}-{inst['id']}"
+    else:
+        seen[base] = True
+        name = base
+
+    return name
+
+
+def format_uptime(unix_ts) -> str:
+    """Format a Unix timestamp as a short uptime string ('3.1h' or '10m')."""
+    if not unix_ts:
+        return "?"
+    started = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
+    now = datetime.now(tz=timezone.utc)
+    seconds = (now - started).total_seconds()
+    hours = seconds / 3600
+    if hours >= 1:
+        return f"{round(hours, 1)}h"
+    return f"{round(seconds / 60)}m"
+
+
+def sync_instances(config: dict) -> list[dict] | None:
+    """Sync running instances from the API to SSH configs.
+
+    Returns a list of instance dicts with keys: name, id, dph_total,
+    gpu_name, num_gpus, start_date, cached.
+
+    Returns None if the API is unreachable and no cached configs exist.
+    """
+    ensure_ssh_include()
+    SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    print("\033[90mSyncing instances...\033[0m")
+    all_instances = fetch_instances()
+
+    if all_instances is None:
+        cached = cached_config_names()
+        if cached:
+            print("\033[33mAPI unreachable -- using cached configs.\033[0m")
+            return [
+                {"name": n, "cached": True, "id": None, "dph_total": 0,
+                 "gpu_name": "", "num_gpus": 0, "start_date": None}
+                for n in cached
+            ]
+        return None
+
+    running = [i for i in all_instances if i.get("cur_state") == "running"]
+
+    clear_ssh_configs()
+
+    if not running:
+        return []
+
+    seen: dict[str, bool] = {}
+    used_ports: set[int] = set()
+    results = []
+
+    for inst in running:
+        name = build_instance_name(inst, seen)
+
+        # Get SSH port -- skip instances without port 22 exposed
+        try:
+            ssh_port = inst["ports"]["22/tcp"][0]["HostPort"]
+        except (KeyError, IndexError, TypeError):
+            continue
+
+        # Build local port forwards
+        local_forwards = []
+        for pf in config["portForwards"]:
+            local_port = find_available_port(int(pf["local"]) + len(results), used_ports)
+            used_ports.add(local_port)
+            local_forwards.append((local_port, int(pf["remote"])))
+
+        write_ssh_config(
+            name,
+            host=inst["public_ipaddr"],
+            port=int(ssh_port),
+            user=config["sshUser"],
+            key_path=config["sshKeyPath"],
+            local_forwards=local_forwards,
+        )
+
+        results.append({
+            "name": name,
+            "id": inst["id"],
+            "dph_total": inst.get("dph_total", 0),
+            "gpu_name": inst.get("gpu_name", ""),
+            "num_gpus": inst.get("num_gpus", 0),
+            "start_date": inst.get("start_date"),
+            "cached": False,
+        })
+
+    return results
+
+
+def get_synced_instances(config: dict) -> list[dict] | None:
+    """Sync and return instances, printing messages for empty/error cases."""
+    result = sync_instances(config)
+    if result is None:
+        print("\033[31mNo running instances found and API unreachable.\033[0m")
+        return None
+    if not result:
+        print("\033[33mNo running Vast instances.\033[0m")
+        return None
+    return result
+
+
+def show_table(instances: list[dict]) -> None:
+    """Print a compact instance table."""
+    for inst in instances:
+        if inst["cached"]:
+            print(f"  {inst['name']}  \033[90m(cached)\033[0m")
+        else:
+            cost = f"${inst['dph_total']:.2f}/hr"
+            uptime = format_uptime(inst["start_date"])
+            print(f"  {inst['name']}   {cost}   {uptime} uptime")
+    print()
+
+
+def select_instance(instances: list[dict], name: str | None = None) -> list[dict]:
+    """Select instance(s) by name, auto-select if only one, or prompt interactively."""
+    names = [i["name"] for i in instances]
+
+    if name:
+        match = [i for i in instances if i["name"] == name]
+        if not match:
+            print(f"\033[31mNo instance named '{name}'. Available: {', '.join(names)}\033[0m")
+            return []
+        return match
+
+    if len(instances) == 1:
+        return [instances[0]]
+
+    # Interactive selection
+    print("Select instance:")
+    for i, n in enumerate(names):
+        print(f"  [{i + 1}] {n}")
+    print(f"  [a] All")
+
+    try:
+        choice = input("Choice: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return []
+
+    if choice == "a":
+        return list(instances)
+
+    if not choice.isdigit():
+        return []
+
+    idx = int(choice)
+    if idx < 1 or idx > len(names):
+        return []
+
+    return [instances[idx - 1]]

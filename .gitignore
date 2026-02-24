@@ -1,4 +1,14 @@
 *.claude
 
-# User config (created by installer, never committed)
+# User config (created on first run, never committed)
 .vastly.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+.pytest_cache/

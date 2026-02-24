@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ── Vastly remote setup script ─────────────────────────────────────────
 # Standalone provisioning script for Vast.ai GPU instances.
-# Receives config as positional arguments from the PowerShell module.
+# Receives config as positional arguments from the vastly CLI.
 # Safe to re-run (idempotent).
 
 # ── Arguments ───────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ export PATH="$HOME/.local/bin:$PATH"
 export PIP_ROOT_USER_ACTION=ignore
 export PIP_PROGRESS_BAR=off
 
-# Disable fancy terminal features — progress bars / cursor movement garble
+# Disable fancy terminal features -- progress bars / cursor movement garble
 # output when piped through SSH to a Windows terminal
 export TERM=dumb
 
@@ -70,7 +70,7 @@ cd "$WORKSPACE"
 if [[ -d "$REPO_NAME" ]]; then
     log "Repo already exists, pulling latest"
     cd "$REPO_NAME"
-    git pull || warn "git pull failed — continuing with existing code"
+    git pull || warn "git pull failed -- continuing with existing code"
 else
     log "Cloning ${REPO_URL} into ${REPO_DIR}"
     git clone "$REPO_URL" "$REPO_NAME" || die "git clone failed"
@@ -117,7 +117,7 @@ setup_python() {
 PYTHON_PATH="$(setup_python)"
 
 if [[ -z "$PYTHON_PATH" ]]; then
-    warn "No Python interpreter found — skipping dependency install"
+    warn "No Python interpreter found -- skipping dependency install"
 fi
 
 # ── Step 6: Install dependencies ────────────────────────────────────────
@@ -137,7 +137,7 @@ if [[ "$INSTALL_COMMAND" != "auto" ]]; then
 elif [[ -n "$PYTHON_PATH" ]]; then
     # Auto-detect install method (checked in priority order)
     if [[ -f uv.lock ]] || ([[ -f pyproject.toml ]] && grep -q '\[tool\.uv\]' pyproject.toml 2>/dev/null); then
-        # uv project — ensure uv is available
+        # uv project -- ensure uv is available
         if ! command -v uv &>/dev/null; then
             log "Installing uv"
             curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -152,11 +152,11 @@ elif [[ -n "$PYTHON_PATH" ]]; then
     elif [[ -f setup.py ]]; then
         run_install "\"${PYTHON_PATH}\" -m pip install -e ."
     else
-        log "No recognized Python project files found — skipping dependency install"
+        log "No recognized Python project files found -- skipping dependency install"
         INSTALL_METHOD="none"
     fi
 else
-    log "No Python interpreter available — skipping dependency install"
+    log "No Python interpreter available -- skipping dependency install"
 fi
 
 # ── Step 7: Post-install commands ───────────────────────────────────────
@@ -202,7 +202,7 @@ if [[ -f ~/.bashrc ]]; then
     sed -i "/${BASHRC_MARKER}/d" ~/.bashrc
 fi
 
-# Build activation lines — conda and venv can coexist
+# Build activation lines -- conda and venv can coexist
 CONDA_LINE=""
 VENV_LINE=""
 

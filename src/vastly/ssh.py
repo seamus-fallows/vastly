@@ -1,0 +1,117 @@
+"""SSH config management, port helpers, and SSH/SCP wrappers."""
+
+from __future__ import annotations
+
+import re
+import socket
+import subprocess
+from pathlib import Path
+
+SSH_CONFIG_DIR = Path.home() / ".ssh" / "vast.d"
+
+# Quick probes (echo ok, test -f, find): fail fast on dead connections
+SSH_OPTS = ["-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"]
+
+# Long-running commands (setup script): allow more time between keepalives
+SSH_SETUP_OPTS = ["-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
+
+
+def is_port_available(port: int) -> bool:
+    """Check if a local TCP port is available to bind."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        try:
+            sock.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
+def find_available_port(start: int, exclude: set[int] | None = None) -> int:
+    """Find the first available port starting from *start*, skipping *exclude*."""
+    exclude = exclude or set()
+    port = start
+    while not is_port_available(port) or port in exclude:
+        port += 1
+    return port
+
+
+def ensure_ssh_include() -> None:
+    """Ensure ~/.ssh/config contains 'Include vast.d/*'."""
+    ssh_dir = Path.home() / ".ssh"
+    ssh_config = ssh_dir / "config"
+    include_line = "Include vast.d/*"
+
+    if ssh_config.exists():
+        content = ssh_config.read_text(encoding="utf-8")
+        if not re.search(r"Include\s+vast\.d[/\\]\*", content):
+            ssh_config.write_text(f"{include_line}\n{content}", encoding="utf-8")
+            print(f"\033[90mAdded '{include_line}' to {ssh_config}\033[0m")
+    else:
+        ssh_dir.mkdir(parents=True, exist_ok=True)
+        ssh_config.write_text(include_line + "\n", encoding="utf-8")
+        print(f"\033[90mCreated {ssh_config} with '{include_line}'\033[0m")
+
+
+def write_ssh_config(name: str, *, host: str, port: int, user: str,
+                     key_path: str | None, local_forwards: list[tuple[int, int]]) -> None:
+    """Write a single SSH config file to ~/.ssh/vast.d/<name>."""
+    SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+
+    lines = [
+        f"Host {name}",
+        f"    HostName {host}",
+        f"    Port {port}",
+        f"    User {user}",
+        "    ForwardAgent yes",
+        "    StrictHostKeyChecking accept-new",
+    ]
+
+    if key_path:
+        lines.append(f"    IdentityFile {key_path}")
+
+    for local_port, remote_port in local_forwards:
+        lines.append(f"    LocalForward {local_port} localhost:{remote_port}")
+
+    config_file = SSH_CONFIG_DIR / name
+    config_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def clear_ssh_configs() -> None:
+    """Remove all files from ~/.ssh/vast.d/."""
+    if SSH_CONFIG_DIR.exists():
+        for f in SSH_CONFIG_DIR.iterdir():
+            f.unlink()
+
+
+def cached_config_names() -> list[str]:
+    """Return names of cached SSH configs in vast.d/."""
+    if not SSH_CONFIG_DIR.exists():
+        return []
+    return [f.name for f in SSH_CONFIG_DIR.iterdir() if f.is_file()]
+
+
+def run_ssh(host: str, command: str, *, setup: bool = False,
+            stream: bool = False) -> subprocess.CompletedProcess:
+    """Run an SSH command on *host*.
+
+    Args:
+        setup: Use longer timeout options (for setup scripts).
+        stream: Print output in real time instead of capturing.
+    """
+    opts = SSH_SETUP_OPTS if setup else SSH_OPTS
+    cmd = ["ssh", *opts, host, command]
+
+    if stream:
+        return subprocess.run(cmd)
+
+    return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def run_scp(src: str, dest: str, *, setup: bool = False) -> subprocess.CompletedProcess:
+    """SCP a file from *src* to *dest*."""
+    opts = SSH_SETUP_OPTS if setup else SSH_OPTS
+    return subprocess.run(
+        ["scp", *opts, src, dest],
+        capture_output=True,
+        text=True,
+    )

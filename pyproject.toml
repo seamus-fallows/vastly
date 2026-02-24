@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vastly"
+version = "0.2.0"
+description = "Connect to Vast.ai GPU instances -- sync SSH, provision, and open your IDE."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+authors = [{ name = "Seamus Fallows" }]
+keywords = ["vast.ai", "gpu", "ssh", "remote-development"]
+
+[project.urls]
+Repository = "https://github.com/seamusfallows/vastly"
+
+[project.scripts]
+vst = "vastly.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vastly"]
