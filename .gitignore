@@ -1,0 +1,6 @@
+*.claude
+reference/
+SPEC.md
+
+# User config (created by installer, never committed)
+.vastly.json
