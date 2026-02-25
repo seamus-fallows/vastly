@@ -213,4 +213,4 @@ class TestMainArgParsing:
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 0
-        assert "vst" in capsys.readouterr().out
+        assert "vastly" in capsys.readouterr().out

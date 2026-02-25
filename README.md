@@ -46,9 +46,9 @@ One instance is selected automatically. Multiple instances prompt you to pick on
 
 ### 3. Setup (first run only)
 
-For each selected instance, `vst` checks if the project has already been set up by looking for a marker file at `~/.vastly/setup/<repo>.json` on the instance. If the marker exists, it skips straight to opening the IDE.
+For each selected instance, `vastly` checks if the project has already been set up by looking for a marker file at `~/.vastly/setup/<repo>.json` on the instance. If the marker exists, it skips straight to opening the IDE.
 
-On first run (no marker), `vst` reads the remote URL from your local git repo, copies a setup script to the instance, and runs it.
+On first run (no marker), `vastly` reads the remote URL from your local git repo, copies a setup script to the instance, and runs it.
 
 The setup script ([setup-remote.sh](src/vastly/data/setup-remote.sh)):
 
@@ -76,7 +76,7 @@ Launches your IDE via Remote-SSH at the project directory. If already open, focu
 
 ## Configuration
 
-On first run, `vst` creates `~/.vastly.json` with defaults:
+On first run, `vastly` creates `~/.vastly.json` with defaults:
 
 ```jsonc
 {
@@ -120,4 +120,4 @@ On first run, `vst` creates `~/.vastly.json` with defaults:
 
 **SSH connection timeout** -- Instance may still be booting. Setup retries 3 times. Run `vastai show instances` to check status.
 
-**"Not in a git repo"** -- `vst` reads the remote URL from your local repo. Run from inside a git repo, or use `--no-setup`.
+**"Not in a git repo"** -- `vastly` reads the remote URL from your local repo. Run from inside a git repo, or use `--no-setup`.
