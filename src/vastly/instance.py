@@ -7,7 +7,7 @@ import re
 import subprocess
 from datetime import datetime, timezone
 
-from vastly import dim, green, red, yellow
+from vastly import dim, red, yellow
 from vastly.ssh import (
     SSH_CONFIG_DIR,
     cached_config_names,
@@ -29,7 +29,11 @@ def fetch_instances() -> list[dict] | None:
         if result.stderr.strip():
             print(red(f"vastai: {result.stderr.strip()}"))
         else:
-            print(red("vastai command failed. Is your API key set? Run: vastai set api-key <key>"))
+            print(
+                red(
+                    "vastai command failed. Is your API key set? Run: vastai set api-key <key>"
+                )
+            )
         return None
     try:
         data = json.loads(result.stdout)
@@ -96,8 +100,15 @@ def sync_instances(config: dict) -> list[dict] | None:
         if cached:
             print(yellow("API unreachable -- using cached configs."))
             return [
-                {"name": n, "cached": True, "id": None, "dph_total": 0,
-                 "gpu_name": "", "num_gpus": 0, "start_date": None}
+                {
+                    "name": n,
+                    "cached": True,
+                    "id": None,
+                    "dph_total": 0,
+                    "gpu_name": "",
+                    "num_gpus": 0,
+                    "start_date": None,
+                }
                 for n in cached
             ]
         return None
@@ -137,15 +148,17 @@ def sync_instances(config: dict) -> list[dict] | None:
             local_forwards=local_forwards,
         )
 
-        results.append({
-            "name": name,
-            "id": inst["id"],
-            "dph_total": inst.get("dph_total", 0),
-            "gpu_name": inst.get("gpu_name", ""),
-            "num_gpus": inst.get("num_gpus", 0),
-            "start_date": inst.get("start_date"),
-            "cached": False,
-        })
+        results.append(
+            {
+                "name": name,
+                "id": inst["id"],
+                "dph_total": inst.get("dph_total", 0),
+                "gpu_name": inst.get("gpu_name", ""),
+                "num_gpus": inst.get("num_gpus", 0),
+                "start_date": inst.get("start_date"),
+                "cached": False,
+            }
+        )
 
     return results
 

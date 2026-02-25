@@ -41,7 +41,8 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     try:
         result = subprocess.run(
             ["git", "remote", "get-url", git_remote],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
     except FileNotFoundError:
         return None
@@ -58,7 +59,9 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     return repo_url, repo_name
 
 
-def _connect(name: str | None, *, no_setup: bool, force_setup: bool, list_only: bool) -> None:
+def _connect(
+    name: str | None, *, no_setup: bool, force_setup: bool, list_only: bool
+) -> None:
     """Main connect flow -- sync instances, check setup, run setup if needed, open IDE."""
     config = load_config()
 
@@ -82,7 +85,11 @@ def _connect(name: str | None, *, no_setup: bool, force_setup: bool, list_only: 
 
     if no_setup or not repo_info:
         if not repo_info and not no_setup:
-            print(yellow("  Not in a git repo. Tip: run vst from inside a git repo to auto-setup."))
+            print(
+                yellow(
+                    "  Not in a git repo. Tip: run vst from inside a git repo to auto-setup."
+                )
+            )
         for inst in selected:
             print(green(f"  Opening {config['workspace']}"))
             open_ide(config["ide"], inst["name"], config["workspace"])
@@ -91,7 +98,9 @@ def _connect(name: str | None, *, no_setup: bool, force_setup: bool, list_only: 
     repo_url, repo_name = repo_info
     remote_path = f"{config['workspace']}/{repo_name}"
 
-    success_names = setup_instances(selected, repo_url, repo_name, config, force_setup=force_setup)
+    success_names = setup_instances(
+        selected, repo_url, repo_name, config, force_setup=force_setup
+    )
     for inst_name in success_names:
         print(green(f"  Opening {remote_path}"))
         open_ide(config["ide"], inst_name, remote_path)
@@ -111,11 +120,24 @@ def main() -> None:
     )
     parser.add_argument("name", nargs="?", help="instance name (from --list output)")
     parser.add_argument("--list", action="store_true", help="list instances and exit")
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )
 
     setup_group = parser.add_mutually_exclusive_group()
-    setup_group.add_argument("--no-setup", action="store_true", help="open IDE without cloning or installing")
-    setup_group.add_argument("--force-setup", action="store_true", help="re-run remote setup even if already done")
+    setup_group.add_argument(
+        "--no-setup", action="store_true", help="open IDE without cloning or installing"
+    )
+    setup_group.add_argument(
+        "--force-setup",
+        action="store_true",
+        help="re-run remote setup even if already done",
+    )
 
     args = parser.parse_args()
-    _connect(args.name, no_setup=args.no_setup, force_setup=args.force_setup, list_only=args.list)
+    _connect(
+        args.name,
+        no_setup=args.no_setup,
+        force_setup=args.force_setup,
+        list_only=args.list,
+    )

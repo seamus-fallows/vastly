@@ -31,7 +31,6 @@ DATA = SRC / "data"
 
 
 class TestFormatUptime:
-
     def test_returns_question_mark_for_none(self):
         assert format_uptime(None) == "?"
 
@@ -66,9 +65,7 @@ class TestFormatUptime:
         assert format_uptime("") == "?"
 
 
-
 class TestLoadConfig:
-
     def test_defaults_on_empty_json(self, tmp_path):
         cfg = tmp_path / ".vastly.json"
         cfg.write_text("{}", encoding="utf-8")
@@ -83,17 +80,22 @@ class TestLoadConfig:
 
     def test_reads_user_values(self, tmp_path):
         cfg = tmp_path / ".vastly.json"
-        cfg.write_text(json.dumps({
-            "ide": "cursor",
-            "sshUser": "ubuntu",
-            "workspace": "/home/ubuntu",
-            "sshKeyPath": "C:\\Users\\me\\.ssh\\id_rsa",
-            "disableAutoTmux": False,
-            "gitRemote": "upstream",
-            "installCommand": "uv sync",
-            "portForwards": [{"local": 3000, "remote": 3000}],
-            "postInstall": ["echo hello"],
-        }), encoding="utf-8")
+        cfg.write_text(
+            json.dumps(
+                {
+                    "ide": "cursor",
+                    "sshUser": "ubuntu",
+                    "workspace": "/home/ubuntu",
+                    "sshKeyPath": "C:\\Users\\me\\.ssh\\id_rsa",
+                    "disableAutoTmux": False,
+                    "gitRemote": "upstream",
+                    "installCommand": "uv sync",
+                    "portForwards": [{"local": 3000, "remote": 3000}],
+                    "postInstall": ["echo hello"],
+                }
+            ),
+            encoding="utf-8",
+        )
 
         result = load_config(cfg)
 
@@ -179,7 +181,6 @@ class TestLoadConfig:
 
 
 class TestPortHelpers:
-
     def test_detects_port_in_use(self):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind(("127.0.0.1", 0))
@@ -207,7 +208,6 @@ class TestPortHelpers:
 
 
 class TestSelectInstance:
-
     def test_returns_matching_by_name(self):
         instances = [
             {"name": "1xRTX3060-TW", "id": 100},
@@ -255,6 +255,7 @@ class TestSelectInstance:
     def test_eof_returns_empty(self, monkeypatch):
         def raise_eof(_):
             raise EOFError
+
         instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
         monkeypatch.setattr("builtins.input", raise_eof)
         assert select_instance(instances) == []
@@ -262,6 +263,7 @@ class TestSelectInstance:
     def test_keyboard_interrupt_returns_empty(self, monkeypatch):
         def raise_ki(_):
             raise KeyboardInterrupt
+
         instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
         monkeypatch.setattr("builtins.input", raise_ki)
         assert select_instance(instances) == []
@@ -283,9 +285,13 @@ class TestSelectInstance:
 
 
 class TestInstanceNaming:
-
     def test_country_gpu_format(self):
-        inst = {"gpu_name": "RTX 4090", "num_gpus": 1, "geolocation": "Taipei, TW", "id": 111}
+        inst = {
+            "gpu_name": "RTX 4090",
+            "num_gpus": 1,
+            "geolocation": "Taipei, TW",
+            "id": 111,
+        }
         seen = set()
         assert build_instance_name(inst, seen) == "1xRTX4090-TW"
 
@@ -295,14 +301,29 @@ class TestInstanceNaming:
         assert build_instance_name(inst, seen) == "2xA100"
 
     def test_strips_spaces_from_gpu(self):
-        inst = {"gpu_name": "GeForce RTX 3060", "num_gpus": 1, "geolocation": "", "id": 111}
+        inst = {
+            "gpu_name": "GeForce RTX 3060",
+            "num_gpus": 1,
+            "geolocation": "",
+            "id": 111,
+        }
         seen = set()
         name = build_instance_name(inst, seen)
         assert " " not in name
 
     def test_appends_id_on_collision(self):
-        inst1 = {"gpu_name": "RTX 4090", "num_gpus": 1, "geolocation": "Taipei, TW", "id": 111}
-        inst2 = {"gpu_name": "RTX 4090", "num_gpus": 1, "geolocation": "Taipei, TW", "id": 222}
+        inst1 = {
+            "gpu_name": "RTX 4090",
+            "num_gpus": 1,
+            "geolocation": "Taipei, TW",
+            "id": 111,
+        }
+        inst2 = {
+            "gpu_name": "RTX 4090",
+            "num_gpus": 1,
+            "geolocation": "Taipei, TW",
+            "id": 222,
+        }
         seen = set()
         name1 = build_instance_name(inst1, seen)
         name2 = build_instance_name(inst2, seen)
@@ -343,21 +364,35 @@ class TestInstanceNaming:
 
 
 class TestUrlConversion:
-
     def test_converts_github_https_to_ssh(self):
-        assert convert_to_ssh_url("https://github.com/user/repo.git") == "git@github.com:user/repo.git"
+        assert (
+            convert_to_ssh_url("https://github.com/user/repo.git")
+            == "git@github.com:user/repo.git"
+        )
 
     def test_converts_gitlab_https_to_ssh(self):
-        assert convert_to_ssh_url("https://gitlab.com/user/repo.git") == "git@gitlab.com:user/repo.git"
+        assert (
+            convert_to_ssh_url("https://gitlab.com/user/repo.git")
+            == "git@gitlab.com:user/repo.git"
+        )
 
     def test_converts_self_hosted_https_to_ssh(self):
-        assert convert_to_ssh_url("https://git.example.com/org/repo.git") == "git@git.example.com:org/repo.git"
+        assert (
+            convert_to_ssh_url("https://git.example.com/org/repo.git")
+            == "git@git.example.com:org/repo.git"
+        )
 
     def test_strips_trailing_slash(self):
-        assert convert_to_ssh_url("https://github.com/user/repo/") == "git@github.com:user/repo"
+        assert (
+            convert_to_ssh_url("https://github.com/user/repo/")
+            == "git@github.com:user/repo"
+        )
 
     def test_leaves_ssh_urls_unchanged(self):
-        assert convert_to_ssh_url("git@github.com:user/repo.git") == "git@github.com:user/repo.git"
+        assert (
+            convert_to_ssh_url("git@github.com:user/repo.git")
+            == "git@github.com:user/repo.git"
+        )
 
     def test_http_url_passes_through(self):
         """Only https:// is converted, not http://."""
@@ -373,7 +408,6 @@ class TestUrlConversion:
 
 
 class TestSshConfig:
-
     def test_generates_valid_config(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
 
@@ -444,42 +478,59 @@ class TestSshConfig:
     def test_omits_identity_file_when_empty_string(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
         write_ssh_config(
-            "test", host="10.0.0.1", port=22, user="root",
-            key_path="", local_forwards=[])
+            "test",
+            host="10.0.0.1",
+            port=22,
+            user="root",
+            key_path="",
+            local_forwards=[],
+        )
         content = (tmp_path / "test").read_text()
         assert "IdentityFile" not in content
 
     def test_no_local_forward_lines_when_empty(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
         write_ssh_config(
-            "test", host="10.0.0.1", port=22, user="root",
-            key_path=None, local_forwards=[])
+            "test",
+            host="10.0.0.1",
+            port=22,
+            user="root",
+            key_path=None,
+            local_forwards=[],
+        )
         content = (tmp_path / "test").read_text()
         assert "LocalForward" not in content
 
 
-
 class TestConfigTemplate:
-
     def test_is_valid_json(self):
         template = (DATA / ".vastly.template.json").read_text(encoding="utf-8")
         json.loads(template)
 
     def test_has_expected_keys(self):
-        template = json.loads((DATA / ".vastly.template.json").read_text(encoding="utf-8"))
-        expected = {"ide", "sshKeyPath", "sshUser", "portForwards", "workspace",
-                    "disableAutoTmux", "gitRemote", "postInstall", "installCommand"}
+        template = json.loads(
+            (DATA / ".vastly.template.json").read_text(encoding="utf-8")
+        )
+        expected = {
+            "ide",
+            "sshKeyPath",
+            "sshUser",
+            "portForwards",
+            "workspace",
+            "disableAutoTmux",
+            "gitRemote",
+            "postInstall",
+            "installCommand",
+        }
         assert set(template.keys()) == expected
 
 
 class TestModuleVersion:
-
     def test_version_is_semver(self):
         assert re.match(r"^\d+\.\d+\.\d+$", __version__)
 
 
 class TestEnsureSshInclude:
-
     def test_creates_config_with_include(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -492,7 +543,9 @@ class TestEnsureSshInclude:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         ssh_dir = tmp_path / ".ssh"
         ssh_dir.mkdir()
-        (ssh_dir / "config").write_text("Host myserver\n    HostName 10.0.0.1\n", encoding="utf-8")
+        (ssh_dir / "config").write_text(
+            "Host myserver\n    HostName 10.0.0.1\n", encoding="utf-8"
+        )
 
         ensure_ssh_include()
 
@@ -504,7 +557,9 @@ class TestEnsureSshInclude:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         ssh_dir = tmp_path / ".ssh"
         ssh_dir.mkdir()
-        (ssh_dir / "config").write_text("Include vast.d/*\nHost myserver\n", encoding="utf-8")
+        (ssh_dir / "config").write_text(
+            "Include vast.d/*\nHost myserver\n", encoding="utf-8"
+        )
 
         ensure_ssh_include()
 
@@ -516,7 +571,9 @@ class TestEnsureSshInclude:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         ssh_dir = tmp_path / ".ssh"
         ssh_dir.mkdir()
-        (ssh_dir / "config").write_text("Include vast.d\\*\nHost myserver\n", encoding="utf-8")
+        (ssh_dir / "config").write_text(
+            "Include vast.d\\*\nHost myserver\n", encoding="utf-8"
+        )
 
         ensure_ssh_include()
 
@@ -525,7 +582,6 @@ class TestEnsureSshInclude:
 
 
 class TestSshConfigManagement:
-
     def test_clear_removes_all_files(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
         (tmp_path / "host1").write_text("config1")
@@ -561,7 +617,6 @@ class TestSshConfigManagement:
 
 
 class TestSetupRemoteScript:
-
     def test_bundled_script_exists(self):
         assert (DATA / "setup-remote.sh").exists()
 
@@ -570,7 +625,8 @@ class TestSetupRemoteScript:
             pytest.skip("bash not available")
         result = subprocess.run(
             ["bash", "-n", str(DATA / "setup-remote.sh")],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         assert result.returncode == 0, result.stderr
 
@@ -580,7 +636,6 @@ class TestSetupRemoteScript:
 
 
 class TestColorFunctions:
-
     def test_identity_when_color_disabled(self, monkeypatch):
         monkeypatch.setattr("vastly._COLOR", False)
         assert red("test") == "test"

@@ -12,10 +12,24 @@ from vastly import dim
 SSH_CONFIG_DIR = Path.home() / ".ssh" / "vast.d"
 
 # Quick probes (echo ok, test -f, find): fail fast on dead connections
-SSH_OPTS = ["-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2"]
+SSH_OPTS = [
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=5",
+    "-o",
+    "ServerAliveCountMax=2",
+]
 
 # Long-running commands (setup script): allow more time between keepalives
-SSH_SETUP_OPTS = ["-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"]
+SSH_SETUP_OPTS = [
+    "-o",
+    "ConnectTimeout=10",
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=4",
+]
 
 
 def is_port_available(port: int) -> bool:
@@ -56,8 +70,15 @@ def ensure_ssh_include() -> None:
         print(dim(f"Created {ssh_config} with '{include_line}'"))
 
 
-def write_ssh_config(name: str, *, host: str, port: int, user: str,
-                     key_path: str | None, local_forwards: list[tuple[int, int]]) -> None:
+def write_ssh_config(
+    name: str,
+    *,
+    host: str,
+    port: int,
+    user: str,
+    key_path: str | None,
+    local_forwards: list[tuple[int, int]],
+) -> None:
     """Write a single SSH config file to ~/.ssh/vast.d/<name>."""
     SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -96,8 +117,9 @@ def cached_config_names() -> list[str]:
     return [f.name for f in SSH_CONFIG_DIR.iterdir() if f.is_file()]
 
 
-def run_ssh(host: str, command: str, *, setup: bool = False,
-            stream: bool = False) -> subprocess.CompletedProcess:
+def run_ssh(
+    host: str, command: str, *, setup: bool = False, stream: bool = False
+) -> subprocess.CompletedProcess:
     """Run an SSH command on *host*.
 
     Args:

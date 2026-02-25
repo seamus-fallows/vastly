@@ -51,6 +51,7 @@ pytestmark = pytest.mark.skipif(
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def synced_instances():
     """Sync instances once for the whole module. Skip if none available."""
@@ -75,7 +76,8 @@ def test_repo():
     """Return (repo_url, repo_name) using the current repo's origin remote."""
     result = subprocess.run(
         ["git", "config", "--get", "remote.origin.url"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     url = result.stdout.strip() if result.returncode == 0 else ""
     if not url:
@@ -87,6 +89,7 @@ def test_repo():
 # ---------------------------------------------------------------------------
 # API connectivity
 # ---------------------------------------------------------------------------
+
 
 class TestAPIConnectivity:
     """Verify that the Vast.ai API is reachable and returns valid data."""
@@ -109,6 +112,7 @@ class TestAPIConnectivity:
 # SSH connectivity
 # ---------------------------------------------------------------------------
 
+
 class TestSSHConnectivity:
     """Verify SSH works through the generated configs."""
 
@@ -129,6 +133,7 @@ class TestSSHConnectivity:
 # ---------------------------------------------------------------------------
 # Remote environment
 # ---------------------------------------------------------------------------
+
 
 class TestRemoteEnvironment:
     """Verify the remote instance has expected tools and paths."""
@@ -151,6 +156,7 @@ class TestRemoteEnvironment:
 # Full remote setup
 # ---------------------------------------------------------------------------
 
+
 class TestRemoteSetup:
     """Test the full setup pipeline on a real instance.
 
@@ -165,9 +171,11 @@ class TestRemoteSetup:
         config = {**DEFAULTS, "postInstall": []}
 
         result = setup_instances(
-            [live_instance], repo_url, repo_name, config, force_setup=True)
+            [live_instance], repo_url, repo_name, config, force_setup=True
+        )
         assert live_instance["name"] in result, (
-            f"Setup failed for {live_instance['name']}")
+            f"Setup failed for {live_instance['name']}"
+        )
 
     def test_marker_file_written(self, live_instance, test_repo):
         """After setup, the marker JSON should exist and be valid."""
@@ -227,6 +235,7 @@ class TestRemoteSetup:
 # ---------------------------------------------------------------------------
 # Port forwarding (smoke test)
 # ---------------------------------------------------------------------------
+
 
 class TestPortForwarding:
     """Verify that port-forward SSH config entries are generated."""

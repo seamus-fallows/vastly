@@ -3,7 +3,10 @@
   "sshKeyPath": null,
   "sshUser": "root",
   "portForwards": [
-    { "local": 8080, "remote": 8080 }
+    {
+      "local": 8080,
+      "remote": 8080
+    }
   ],
   "workspace": "/workspace",
   "disableAutoTmux": true,

@@ -9,13 +9,15 @@ from vastly.ide import open_ide
 
 
 class TestOpenIde:
-
     def test_launches_with_correct_args(self):
         with patch("subprocess.Popen") as mock_popen:
             open_ide("code", "my-instance", "/workspace/project")
             cmd = mock_popen.call_args[0][0]
             assert cmd == [
-                "code", "--remote", "ssh-remote+my-instance", "/workspace/project",
+                "code",
+                "--remote",
+                "ssh-remote+my-instance",
+                "/workspace/project",
             ]
 
     def test_shell_true_on_windows(self, monkeypatch):

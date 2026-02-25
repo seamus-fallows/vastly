@@ -15,18 +15,21 @@ from vastly.instance import (
 
 
 class TestFetchInstances:
-
     def test_returns_list_on_success(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(a[0], 0, stdout='[{"id": 1}]', stderr=""),
+            lambda *a, **kw: subprocess.CompletedProcess(
+                a[0], 0, stdout='[{"id": 1}]', stderr=""
+            ),
         )
         assert fetch_instances() == [{"id": 1}]
 
     def test_returns_none_on_nonzero_exit_with_stderr(self, monkeypatch, capsys):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(a[0], 1, stdout="", stderr="auth error"),
+            lambda *a, **kw: subprocess.CompletedProcess(
+                a[0], 1, stdout="", stderr="auth error"
+            ),
         )
         assert fetch_instances() is None
         assert "auth error" in capsys.readouterr().out
@@ -42,7 +45,9 @@ class TestFetchInstances:
     def test_returns_none_on_invalid_json(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(a[0], 0, stdout="not json", stderr=""),
+            lambda *a, **kw: subprocess.CompletedProcess(
+                a[0], 0, stdout="not json", stderr=""
+            ),
         )
         assert fetch_instances() is None
 
@@ -50,20 +55,22 @@ class TestFetchInstances:
         monkeypatch.setattr(
             "subprocess.run",
             lambda *a, **kw: subprocess.CompletedProcess(
-                a[0], 0, stdout='{"error": "msg"}', stderr=""),
+                a[0], 0, stdout='{"error": "msg"}', stderr=""
+            ),
         )
         assert fetch_instances() is None
 
     def test_returns_empty_list(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(a[0], 0, stdout="[]", stderr=""),
+            lambda *a, **kw: subprocess.CompletedProcess(
+                a[0], 0, stdout="[]", stderr=""
+            ),
         )
         assert fetch_instances() == []
 
 
 class TestSyncInstances:
-
     @pytest.fixture(autouse=True)
     def _mock_deps(self, monkeypatch, ssh_config_dir):
         """Mock the external deps that touch the filesystem or network."""
@@ -72,13 +79,17 @@ class TestSyncInstances:
         monkeypatch.setattr("vastly.instance.write_ssh_config", lambda *a, **kw: None)
 
     def test_syncs_running_instances(self, monkeypatch, make_instance, make_config):
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: [make_instance()])
+        monkeypatch.setattr(
+            "vastly.instance.fetch_instances", lambda: [make_instance()]
+        )
         result = sync_instances(make_config())
         assert len(result) == 1
         assert result[0]["name"] == "1xRTX4090-US"
         assert result[0]["cached"] is False
 
-    def test_filters_non_running_instances(self, monkeypatch, make_instance, make_config):
+    def test_filters_non_running_instances(
+        self, monkeypatch, make_instance, make_config
+    ):
         monkeypatch.setattr(
             "vastly.instance.fetch_instances",
             lambda: [
@@ -89,7 +100,9 @@ class TestSyncInstances:
         result = sync_instances(make_config())
         assert len(result) == 1
 
-    def test_skips_instance_without_port_22(self, monkeypatch, make_instance, make_config):
+    def test_skips_instance_without_port_22(
+        self, monkeypatch, make_instance, make_config
+    ):
         monkeypatch.setattr(
             "vastly.instance.fetch_instances",
             lambda: [make_instance(ports={})],
@@ -97,7 +110,9 @@ class TestSyncInstances:
         result = sync_instances(make_config())
         assert result == []
 
-    def test_skips_instance_with_malformed_ports(self, monkeypatch, make_instance, make_config):
+    def test_skips_instance_with_malformed_ports(
+        self, monkeypatch, make_instance, make_config
+    ):
         monkeypatch.setattr(
             "vastly.instance.fetch_instances",
             lambda: [make_instance(ports={"22/tcp": []})],  # empty list
@@ -105,10 +120,13 @@ class TestSyncInstances:
         result = sync_instances(make_config())
         assert result == []
 
-    def test_falls_back_to_cache_when_api_fails(self, monkeypatch, make_config, ssh_config_dir):
+    def test_falls_back_to_cache_when_api_fails(
+        self, monkeypatch, make_config, ssh_config_dir
+    ):
         monkeypatch.setattr("vastly.instance.fetch_instances", lambda: None)
         monkeypatch.setattr(
-            "vastly.instance.cached_config_names", lambda: ["1xRTX4090-US"],
+            "vastly.instance.cached_config_names",
+            lambda: ["1xRTX4090-US"],
         )
         result = sync_instances(make_config())
         assert len(result) == 1
@@ -120,7 +138,9 @@ class TestSyncInstances:
         monkeypatch.setattr("vastly.instance.cached_config_names", lambda: [])
         assert sync_instances(make_config()) is None
 
-    def test_returns_empty_list_when_none_running(self, monkeypatch, make_instance, make_config):
+    def test_returns_empty_list_when_none_running(
+        self, monkeypatch, make_instance, make_config
+    ):
         monkeypatch.setattr(
             "vastly.instance.fetch_instances",
             lambda: [make_instance(cur_state="exited")],
@@ -128,7 +148,9 @@ class TestSyncInstances:
         result = sync_instances(make_config())
         assert result == []
 
-    def test_port_forwards_avoid_collisions(self, monkeypatch, make_instance, make_config):
+    def test_port_forwards_avoid_collisions(
+        self, monkeypatch, make_instance, make_config
+    ):
         """Two instances with the same configured port should get different local ports."""
         monkeypatch.setattr(
             "vastly.instance.fetch_instances",
@@ -148,8 +170,12 @@ class TestSyncInstances:
         port2 = writes[1]["local_forwards"][0][0]
         assert port1 != port2
 
-    def test_passes_config_values_to_write(self, monkeypatch, make_instance, make_config):
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: [make_instance()])
+    def test_passes_config_values_to_write(
+        self, monkeypatch, make_instance, make_config
+    ):
+        monkeypatch.setattr(
+            "vastly.instance.fetch_instances", lambda: [make_instance()]
+        )
         writes = []
         monkeypatch.setattr(
             "vastly.instance.write_ssh_config",
@@ -161,7 +187,6 @@ class TestSyncInstances:
 
 
 class TestGetSyncedInstances:
-
     def test_prints_error_when_api_unreachable(self, monkeypatch, make_config, capsys):
         monkeypatch.setattr("vastly.instance.sync_instances", lambda cfg: None)
         assert get_synced_instances(make_config()) is None
@@ -179,10 +204,14 @@ class TestGetSyncedInstances:
 
 
 class TestShowTable:
-
     def test_live_instance_format(self, capsys):
         instances = [
-            {"name": "1xRTX4090-US", "cached": False, "dph_total": 0.55, "start_date": None},
+            {
+                "name": "1xRTX4090-US",
+                "cached": False,
+                "dph_total": 0.55,
+                "start_date": None,
+            },
         ]
         show_table(instances)
         out = capsys.readouterr().out
@@ -191,7 +220,12 @@ class TestShowTable:
 
     def test_cached_instance_format(self, capsys):
         instances = [
-            {"name": "1xRTX4090-US", "cached": True, "dph_total": 0, "start_date": None},
+            {
+                "name": "1xRTX4090-US",
+                "cached": True,
+                "dph_total": 0,
+                "start_date": None,
+            },
         ]
         show_table(instances)
         out = capsys.readouterr().out

@@ -32,11 +32,13 @@ def setup_instances(
     """Run remote setup on each instance. Returns list of successful host names."""
     git_name = subprocess.run(
         ["git", "config", "--global", "user.name"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     git_email = subprocess.run(
         ["git", "config", "--global", "user.email"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
 
     setup_script = Path(str(resources.files("vastly.data").joinpath("setup-remote.sh")))
@@ -84,14 +86,22 @@ def setup_instances(
 
         print(cyan("running setup..."))
 
-        scp_result = run_scp(str(setup_script), f"{name}:/tmp/_vastly-setup.sh", setup=True)
+        scp_result = run_scp(
+            str(setup_script), f"{name}:/tmp/_vastly-setup.sh", setup=True
+        )
         if scp_result.returncode != 0:
             print(red(f"  {name}: failed to copy setup script"))
             continue
 
         setup_args = [
-            repo_url, repo_name, git_name, git_email,
-            config["workspace"], disable_tmux, install_cmd, __version__,
+            repo_url,
+            repo_name,
+            git_name,
+            git_email,
+            config["workspace"],
+            disable_tmux,
+            install_cmd,
+            __version__,
         ] + config["postInstall"]
 
         quoted = " ".join(shlex.quote(a) for a in setup_args)
