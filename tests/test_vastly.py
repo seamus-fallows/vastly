@@ -284,6 +284,8 @@ class TestSshConfig:
         assert "User root" in content
         assert "ForwardAgent yes" in content
         assert "StrictHostKeyChecking accept-new" in content
+        assert "UserKnownHostsFile" in content
+        assert "known_hosts" in content
 
     def test_includes_identity_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)

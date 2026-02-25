@@ -68,6 +68,7 @@ def write_ssh_config(name: str, *, host: str, port: int, user: str,
         f"    User {user}",
         "    ForwardAgent yes",
         "    StrictHostKeyChecking accept-new",
+        f"    UserKnownHostsFile {(SSH_CONFIG_DIR / 'known_hosts').as_posix()}",
     ]
 
     if key_path:
@@ -92,7 +93,8 @@ def cached_config_names() -> list[str]:
     """Return names of cached SSH configs in vast.d/."""
     if not SSH_CONFIG_DIR.exists():
         return []
-    return [f.name for f in SSH_CONFIG_DIR.iterdir() if f.is_file()]
+    return [f.name for f in SSH_CONFIG_DIR.iterdir()
+            if f.is_file() and f.name != "known_hosts"]
 
 
 def run_ssh(host: str, command: str, *, setup: bool = False,
