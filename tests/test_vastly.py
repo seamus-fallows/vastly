@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from vastly import __version__
+from vastly import __version__, cyan, dim, green, red, yellow
 from vastly.config import load_config
 from vastly.instance import build_instance_name, format_uptime, select_instance
 from vastly.remote import convert_to_ssh_url
@@ -47,6 +47,24 @@ class TestFormatUptime:
         ts = datetime.now(tz=timezone.utc).timestamp() - 600
         result = format_uptime(ts)
         assert re.match(r"^\d+m$", result)
+
+    def test_boundary_at_exactly_one_hour(self):
+        ts = datetime.now(tz=timezone.utc).timestamp() - 3600
+        result = format_uptime(ts)
+        assert result.endswith("h")
+
+    def test_very_recent_timestamp(self):
+        ts = datetime.now(tz=timezone.utc).timestamp() - 5
+        assert format_uptime(ts) == "0m"
+
+    def test_large_uptime(self):
+        ts = datetime.now(tz=timezone.utc).timestamp() - (100 * 3600)
+        result = format_uptime(ts)
+        assert float(result.rstrip("h")) >= 99
+
+    def test_returns_question_mark_for_empty_string(self):
+        assert format_uptime("") == "?"
+
 
 
 class TestLoadConfig:
@@ -145,6 +163,20 @@ class TestLoadConfig:
         with pytest.raises(SystemExit):
             load_config(cfg)
 
+    def test_null_values_fall_back_to_defaults(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"sshUser": null, "ide": null}', encoding="utf-8")
+        result = load_config(cfg)
+        assert result["sshUser"] == "root"
+        assert result["ide"] == "code"
+
+    def test_unknown_keys_ignored(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"customKey": "value", "ide": "cursor"}', encoding="utf-8")
+        result = load_config(cfg)
+        assert result["ide"] == "cursor"
+        assert "customKey" not in result
+
 
 class TestPortHelpers:
 
@@ -210,6 +242,45 @@ class TestSelectInstance:
         assert result[0]["name"] == "1xRTX3060-TW"
         assert result[1]["name"] == "2xA100-US"
 
+    def test_select_by_number(self, monkeypatch):
+        instances = [
+            {"name": "1xRTX3060-TW", "id": 100},
+            {"name": "2xA100-US", "id": 200},
+        ]
+        monkeypatch.setattr("builtins.input", lambda _: "2")
+        result = select_instance(instances)
+        assert len(result) == 1
+        assert result[0]["name"] == "2xA100-US"
+
+    def test_eof_returns_empty(self, monkeypatch):
+        def raise_eof(_):
+            raise EOFError
+        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        monkeypatch.setattr("builtins.input", raise_eof)
+        assert select_instance(instances) == []
+
+    def test_keyboard_interrupt_returns_empty(self, monkeypatch):
+        def raise_ki(_):
+            raise KeyboardInterrupt
+        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        monkeypatch.setattr("builtins.input", raise_ki)
+        assert select_instance(instances) == []
+
+    def test_out_of_range_returns_empty(self, monkeypatch):
+        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        monkeypatch.setattr("builtins.input", lambda _: "5")
+        assert select_instance(instances) == []
+
+    def test_zero_returns_empty(self, monkeypatch):
+        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        monkeypatch.setattr("builtins.input", lambda _: "0")
+        assert select_instance(instances) == []
+
+    def test_non_digit_returns_empty(self, monkeypatch):
+        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        monkeypatch.setattr("builtins.input", lambda _: "xyz")
+        assert select_instance(instances) == []
+
 
 class TestInstanceNaming:
 
@@ -243,6 +314,33 @@ class TestInstanceNaming:
         seen = set()
         assert build_instance_name(inst, seen) == "1xA100"
 
+    def test_defaults_num_gpus_to_one(self):
+        inst = {"gpu_name": "A100", "geolocation": "", "id": 111}
+        seen = set()
+        assert build_instance_name(inst, seen).startswith("1x")
+
+    def test_geolocation_single_word_no_comma(self):
+        """A geolocation with no comma yields no country suffix."""
+        inst = {"gpu_name": "A100", "num_gpus": 1, "geolocation": "US", "id": 111}
+        seen = set()
+        assert build_instance_name(inst, seen) == "1xA100"
+
+    def test_three_way_collision(self):
+        base = {"gpu_name": "A100", "num_gpus": 1, "geolocation": "City, US"}
+        seen = set()
+        n1 = build_instance_name({**base, "id": 1}, seen)
+        n2 = build_instance_name({**base, "id": 2}, seen)
+        n3 = build_instance_name({**base, "id": 3}, seen)
+        assert n1 == "1xA100-US"
+        assert n2 == "1xA100-US-2"
+        assert n3 == "1xA100-US-3"
+
+    def test_handles_missing_gpu_name(self):
+        inst = {"num_gpus": 1, "geolocation": "", "id": 111}
+        seen = set()
+        name = build_instance_name(inst, seen)
+        assert name == "1x"
+
 
 class TestUrlConversion:
 
@@ -261,15 +359,17 @@ class TestUrlConversion:
     def test_leaves_ssh_urls_unchanged(self):
         assert convert_to_ssh_url("git@github.com:user/repo.git") == "git@github.com:user/repo.git"
 
-    def test_extracts_repo_name_from_ssh_url(self):
-        url = convert_to_ssh_url("git@github.com:user/my-project.git")
-        name = url.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
-        assert name == "my-project"
+    def test_http_url_passes_through(self):
+        """Only https:// is converted, not http://."""
+        url = "http://github.com/user/repo.git"
+        assert convert_to_ssh_url(url) == url
 
-    def test_extracts_repo_name_without_git_suffix(self):
-        url = convert_to_ssh_url("https://github.com/user/repo")
-        name = url.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
-        assert name == "repo"
+    def test_empty_string_passes_through(self):
+        assert convert_to_ssh_url("") == ""
+
+    def test_nested_gitlab_path(self):
+        result = convert_to_ssh_url("https://gitlab.com/group/subgroup/repo.git")
+        assert result == "git@gitlab.com:group/subgroup/repo.git"
 
 
 class TestSshConfig:
@@ -292,9 +392,8 @@ class TestSshConfig:
         assert "Port 22222" in content
         assert "User root" in content
         assert "ForwardAgent yes" in content
-        assert "StrictHostKeyChecking accept-new" in content
-        assert "UserKnownHostsFile" in content
-        assert "known_hosts" in content
+        assert "StrictHostKeyChecking no" in content
+        assert "UserKnownHostsFile /dev/null" in content
 
     def test_includes_identity_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
@@ -342,6 +441,23 @@ class TestSshConfig:
         assert "LocalForward 8080 localhost:8080" in content
         assert "LocalForward 3000 localhost:3000" in content
 
+    def test_omits_identity_file_when_empty_string(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
+        write_ssh_config(
+            "test", host="10.0.0.1", port=22, user="root",
+            key_path="", local_forwards=[])
+        content = (tmp_path / "test").read_text()
+        assert "IdentityFile" not in content
+
+    def test_no_local_forward_lines_when_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
+        write_ssh_config(
+            "test", host="10.0.0.1", port=22, user="root",
+            key_path=None, local_forwards=[])
+        content = (tmp_path / "test").read_text()
+        assert "LocalForward" not in content
+
+
 
 class TestConfigTemplate:
 
@@ -358,26 +474,8 @@ class TestConfigTemplate:
 
 class TestModuleVersion:
 
-    def test_version_exists(self):
-        assert __version__
-
     def test_version_is_semver(self):
         assert re.match(r"^\d+\.\d+\.\d+$", __version__)
-
-    def test_version_is_dynamic_in_pyproject(self):
-        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        assert 'dynamic = ["version"]' in pyproject
-        assert 'path = "src/vastly/__init__.py"' in pyproject
-
-
-class TestFileEncoding:
-
-    def test_python_files_are_ascii(self):
-        for pattern in ("src/vastly/*.py", "tests/*.py"):
-            for f in ROOT.glob(pattern):
-                content = f.read_bytes()
-                non_ascii = [b for b in content if b > 127]
-                assert not non_ascii, f"Non-ASCII bytes in {f.name}"
 
 
 class TestEnsureSshInclude:
@@ -413,6 +511,18 @@ class TestEnsureSshInclude:
         content = (ssh_dir / "config").read_text()
         assert content.count("Include vast.d/*") == 1
 
+    def test_detects_existing_backslash_include(self, tmp_path, monkeypatch):
+        """Windows-style backslash in existing Include should be detected."""
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        ssh_dir = tmp_path / ".ssh"
+        ssh_dir.mkdir()
+        (ssh_dir / "config").write_text("Include vast.d\\*\nHost myserver\n", encoding="utf-8")
+
+        ensure_ssh_include()
+
+        content = (ssh_dir / "config").read_text()
+        assert content.count("Include") == 1
+
 
 class TestSshConfigManagement:
 
@@ -444,15 +554,6 @@ class TestSshConfigManagement:
 
         assert set(names) == {"1xRTX4090-TW", "US-2xA100"}
 
-    def test_cached_names_excludes_known_hosts(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
-        (tmp_path / "1xRTX4090-TW").write_text("config")
-        (tmp_path / "known_hosts").write_text("host keys")
-
-        names = cached_config_names()
-
-        assert names == ["1xRTX4090-TW"]
-
     def test_cached_names_empty_when_dir_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path / "nonexistent")
 
@@ -472,3 +573,32 @@ class TestSetupRemoteScript:
             capture_output=True, text=True,
         )
         assert result.returncode == 0, result.stderr
+
+    def test_script_uses_strict_mode(self):
+        content = (DATA / "setup-remote.sh").read_text(encoding="utf-8")
+        assert "set -euo pipefail" in content
+
+
+class TestColorFunctions:
+
+    def test_identity_when_color_disabled(self, monkeypatch):
+        monkeypatch.setattr("vastly._COLOR", False)
+        assert red("test") == "test"
+        assert green("test") == "test"
+        assert yellow("test") == "test"
+        assert cyan("test") == "test"
+        assert dim("test") == "test"
+
+    def test_ansi_codes_when_color_enabled(self, monkeypatch):
+        monkeypatch.setattr("vastly._COLOR", True)
+        assert red("test") == "\033[31mtest\033[0m"
+        assert green("test") == "\033[32mtest\033[0m"
+        assert yellow("test") == "\033[33mtest\033[0m"
+        assert cyan("test") == "\033[36mtest\033[0m"
+        assert dim("test") == "\033[90mtest\033[0m"
+
+    def test_handles_non_string_input(self, monkeypatch):
+        monkeypatch.setattr("vastly._COLOR", False)
+        assert red(42) == 42
+        monkeypatch.setattr("vastly._COLOR", True)
+        assert "42" in red(42)

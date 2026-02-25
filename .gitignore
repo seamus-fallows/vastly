@@ -1,6 +1,5 @@
 *.claude
-
-# User config (created on first run, never committed)
+.vscode/
 .vastly.json
 
 # Python

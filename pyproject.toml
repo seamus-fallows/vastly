@@ -24,6 +24,9 @@ classifiers = [
     "Topic :: Software Development",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest"]
+
 [project.urls]
 Repository = "https://github.com/seamus-fallows/vastly"
 Issues = "https://github.com/seamus-fallows/vastly/issues"
@@ -36,3 +39,5 @@ path = "src/vastly/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vastly"]
+
+[tool.pytest.ini_options]

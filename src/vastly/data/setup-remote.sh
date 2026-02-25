@@ -243,10 +243,11 @@ TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
 log "Writing setup marker to ${MARKER_DIR}/${REPO_NAME}.json"
 mkdir -p "$MARKER_DIR"
+INSTALL_METHOD_ESCAPED="${INSTALL_METHOD//\"/\\\"}"
 cat > "${MARKER_DIR}/${REPO_NAME}.json" << MARKEREOF
 {
     "timestamp": "${TIMESTAMP}",
-    "installMethod": "${INSTALL_METHOD}",
+    "installMethod": "${INSTALL_METHOD_ESCAPED}",
     "moduleVersion": "${MODULE_VERSION}"
 }
 MARKEREOF

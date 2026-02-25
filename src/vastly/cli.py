@@ -109,7 +109,7 @@ def main() -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("name", nargs="?", help="instance name (tab-complete from ~/.ssh/vast.d/)")
+    parser.add_argument("name", nargs="?", help="instance name (from --list output)")
     parser.add_argument("--list", action="store_true", help="list instances and exit")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
