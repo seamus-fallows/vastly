@@ -13,18 +13,21 @@ CONFIG_PATH = Path.home() / ".vastly.json"
 
 DEFAULTS = {
     "ide": "code",
+    "sshKeyPath": None,
     "sshUser": "root",
+    "portForwards": [{"local": 8080, "remote": 8080}],
     "workspace": "/workspace",
     "disableAutoTmux": True,
     "gitRemote": "origin",
+    "postInstall": [],
+    "installCommand": None,
 }
+
+_STRING_KEYS = {"ide", "sshUser", "workspace", "gitRemote"}
 
 
 def load_config(path: Path | None = None) -> dict:
-    """Load config from disk, creating from template if missing.
-
-    Returns a dict with all keys populated (user values override defaults).
-    """
+    """Load config from disk, creating from template if missing."""
     path = path or CONFIG_PATH
 
     if not path.exists():
@@ -40,24 +43,17 @@ def load_config(path: Path | None = None) -> dict:
         print("Fix the file or delete it to regenerate from template.")
         sys.exit(1)
 
-    port_forwards = raw.get("portForwards")
-    if port_forwards is None:
-        port_forwards = [{"local": 8080, "remote": 8080}]
+    # User values override defaults; None (or empty string for text keys) = use default
+    config = {}
+    for k, v in DEFAULTS.items():
+        user_val = raw.get(k)
+        if user_val is None or (k in _STRING_KEYS and user_val == ""):
+            config[k] = v
+        else:
+            config[k] = user_val
 
-    post_install = raw.get("postInstall")
-    if isinstance(post_install, str):
-        post_install = [post_install]
-    elif not post_install:
-        post_install = []
+    # Normalize: accept single string for postInstall
+    if isinstance(config["postInstall"], str):
+        config["postInstall"] = [config["postInstall"]]
 
-    return {
-        "ide": raw.get("ide") or DEFAULTS["ide"],
-        "sshKeyPath": raw.get("sshKeyPath"),
-        "sshUser": raw.get("sshUser") or DEFAULTS["sshUser"],
-        "portForwards": list(port_forwards),
-        "workspace": raw.get("workspace") or DEFAULTS["workspace"],
-        "disableAutoTmux": raw.get("disableAutoTmux", DEFAULTS["disableAutoTmux"]),
-        "gitRemote": raw.get("gitRemote") or DEFAULTS["gitRemote"],
-        "postInstall": list(post_install),
-        "installCommand": raw.get("installCommand"),
-    }
+    return config
