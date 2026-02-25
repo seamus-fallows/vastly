@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "vastly"
 dynamic = ["version"]
-description = "Connect to Vast.ai GPU instances -- sync SSH configs, set up your project, and open your IDE."
+description = "Connect to Vast.ai GPU instances: sync SSH configs, set up your project, and open your IDE."
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [{ name = "Seamus Fallows" }]

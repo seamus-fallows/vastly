@@ -110,7 +110,7 @@ def main() -> None:
     """Parse arguments and run the connect flow."""
     parser = argparse.ArgumentParser(
         prog="vst",
-        description="Connect to a Vast.ai instance -- sync SSH, set up your project, and open your IDE.",
+        description="Connect to a Vast.ai instance: sync SSH, set up your project, and open your IDE.",
         epilog=(
             "alias:         `vastly` and `vst` are the same command\n"
             "prerequisites: vastai CLI (pip install vastai), git, ssh, VS Code or Cursor\n"
