@@ -32,21 +32,18 @@ def setup_instances(
     repo_url: str,
     repo_name: str,
     config: dict,
+    *,
+    force_setup: bool = False,
 ) -> list[str]:
     """Run remote setup on each instance. Returns list of successful host names."""
     git_name = subprocess.run(
         ["git", "config", "--global", "user.name"],
         capture_output=True, text=True,
     ).stdout.strip()
-
     git_email = subprocess.run(
         ["git", "config", "--global", "user.email"],
         capture_output=True, text=True,
     ).stdout.strip()
-
-    if not git_name or not git_email:
-        print(red('Git identity not configured. Run: git config --global user.name "Your Name"'))
-        return []
 
     setup_script = _setup_script_path()
     if not setup_script.exists():
@@ -55,7 +52,6 @@ def setup_instances(
 
     install_cmd = config["installCommand"] or "auto"
     disable_tmux = "true" if config["disableAutoTmux"] else "false"
-
     success_names = []
 
     for inst in instances:
@@ -74,25 +70,31 @@ def setup_instances(
                 time.sleep(5)
 
         if not reachable:
-            print(red("unreachable after 3 attempts. Check vastai show instances to confirm it is running."))
+            print(red("unreachable after 3 attempts."))
             continue
 
-        # Check setup marker
-        marker_result = run_ssh(name, f"test -f ~/.vastly/setup/{repo_name}.json && echo done")
-        if marker_result.stdout.strip() == "done":
+        if force_setup:
+            run_ssh(name, f"rm -f ~/.vastly/setup/{repo_name}.json")
+
+        marker = run_ssh(name, f"test -f ~/.vastly/setup/{repo_name}.json && echo done")
+        if marker.stdout.strip() == "done":
             print(green("already set up."))
             success_names.append(name)
             continue
 
+        # Setup is needed -- git identity required
+        if not git_name or not git_email:
+            print(red("setup needed but git identity not configured."))
+            print(red('  Run: git config --global user.name "Your Name"'))
+            continue
+
         print(cyan("running setup..."))
 
-        # SCP setup script
         scp_result = run_scp(str(setup_script), f"{name}:/tmp/_vastly-setup.sh", setup=True)
         if scp_result.returncode != 0:
             print(red(f"  {name}: failed to copy setup script"))
             continue
 
-        # Build argument list
         setup_args = [
             repo_url, repo_name, git_name, git_email,
             config["workspace"], disable_tmux, install_cmd, __version__,

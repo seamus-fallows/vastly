@@ -11,7 +11,6 @@ from vastly.config import load_config
 from vastly.ide import check_ide, open_ide
 from vastly.instance import get_synced_instances, select_instance, show_table
 from vastly.remote import convert_to_ssh_url, setup_instances
-from vastly.ssh import run_ssh
 
 
 def _check_prerequisites(*, need_ide: bool = False, ide: str) -> bool:
@@ -59,11 +58,11 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     return repo_url, repo_name
 
 
-def _connect(name: str | None, no_setup: bool) -> None:
+def _connect(name: str | None, *, no_setup: bool, force_setup: bool, list_only: bool) -> None:
     """Main connect flow -- sync instances, check setup, run setup if needed, open IDE."""
     config = load_config()
 
-    if not _check_prerequisites(need_ide=True, ide=config["ide"]):
+    if not _check_prerequisites(need_ide=not list_only, ide=config["ide"]):
         return
 
     instances = get_synced_instances(config)
@@ -72,42 +71,30 @@ def _connect(name: str | None, no_setup: bool) -> None:
 
     show_table(instances)
 
+    if list_only:
+        return
+
     selected = select_instance(instances, name)
     if not selected:
         return
 
     repo_info = _local_repo_info(config["gitRemote"])
 
-    for inst in selected:
-        inst_name = inst["name"]
-
-        if no_setup or not repo_info:
-            # Skip setup -- open workspace root
-            if not repo_info and not no_setup:
-                print(yellow("  Not in a git repo. Tip: run vst from inside a git repo to auto-setup."))
+    if no_setup or not repo_info:
+        if not repo_info and not no_setup:
+            print(yellow("  Not in a git repo. Tip: run vst from inside a git repo to auto-setup."))
+        for inst in selected:
             print(green(f"  Opening {config['workspace']}"))
-            open_ide(config["ide"], inst_name, config["workspace"])
-            continue
+            open_ide(config["ide"], inst["name"], config["workspace"])
+        return
 
-        repo_url, repo_name = repo_info
-        remote_path = f"{config['workspace']}/{repo_name}"
+    repo_url, repo_name = repo_info
+    remote_path = f"{config['workspace']}/{repo_name}"
 
-        # Check if project is already set up via marker file
-        result = run_ssh(inst_name, f"test -f ~/.vastly/setup/{repo_name}.json && echo done")
-
-        if result.returncode != 0:
-            print(red(f"  {inst_name}: unreachable via SSH."))
-            continue
-
-        if result.stdout.strip() == "done":
-            print(green(f"  Opening {remote_path}"))
-            open_ide(config["ide"], inst_name, remote_path)
-            continue
-
-        # Not set up yet -- run setup
-        success = setup_instances([inst], repo_url, repo_name, config)
-        if success:
-            open_ide(config["ide"], inst_name, remote_path)
+    success_names = setup_instances(selected, repo_url, repo_name, config, force_setup=force_setup)
+    for inst_name in success_names:
+        print(green(f"  Opening {remote_path}"))
+        open_ide(config["ide"], inst_name, remote_path)
 
 
 def main() -> None:
@@ -127,4 +114,4 @@ def main() -> None:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
     args = parser.parse_args()
-    _connect(args.name, args.no_setup)
+    _connect(args.name, no_setup=args.no_setup, force_setup=False, list_only=False)
