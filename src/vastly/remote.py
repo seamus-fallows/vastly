@@ -9,7 +9,7 @@ import time
 from importlib import resources
 from pathlib import Path
 
-from vastly import __version__
+from vastly import __version__, cyan, green, red, yellow
 from vastly.ssh import run_scp, run_ssh
 
 
@@ -45,12 +45,12 @@ def setup_instances(
     ).stdout.strip()
 
     if not git_name or not git_email:
-        print('\033[31mGit identity not configured. Run: git config --global user.name "Your Name"\033[0m')
+        print(red('Git identity not configured. Run: git config --global user.name "Your Name"'))
         return []
 
     setup_script = _setup_script_path()
     if not setup_script.exists():
-        print(f"\033[31mSetup script not found at {setup_script}\033[0m")
+        print(red(f"Setup script not found at {setup_script}"))
         return []
 
     install_cmd = config["installCommand"] or "auto"
@@ -70,26 +70,26 @@ def setup_instances(
                 reachable = True
                 break
             if attempt < 3:
-                print("\033[33mwaiting...\033[0m", end="", flush=True)
+                print(yellow("waiting..."), end="", flush=True)
                 time.sleep(5)
 
         if not reachable:
-            print("\033[31munreachable after 3 attempts. Check vastai show instances to confirm it is running.\033[0m")
+            print(red("unreachable after 3 attempts. Check vastai show instances to confirm it is running."))
             continue
 
         # Check setup marker
         marker_result = run_ssh(name, f"test -f ~/.vastly/setup/{repo_name}.json && echo done")
         if marker_result.stdout.strip() == "done":
-            print("\033[32malready set up.\033[0m")
+            print(green("already set up."))
             success_names.append(name)
             continue
 
-        print("\033[36mrunning setup...\033[0m")
+        print(cyan("running setup..."))
 
         # SCP setup script
         scp_result = run_scp(str(setup_script), f"{name}:/tmp/_vastly-setup.sh", setup=True)
         if scp_result.returncode != 0:
-            print(f"  \033[31m{name}: failed to copy setup script\033[0m")
+            print(red(f"  {name}: failed to copy setup script"))
             continue
 
         # Build argument list
@@ -108,10 +108,10 @@ def setup_instances(
         result = run_ssh(name, remote_cmd, setup=True, stream=True)
 
         if result.returncode != 0:
-            print(f"  \033[31m{name}: setup failed (exit {result.returncode})\033[0m")
+            print(red(f"  {name}: setup failed (exit {result.returncode})"))
             continue
 
-        print(f"  \033[32m{name}: done.\033[0m")
+        print(green(f"  {name}: done."))
         success_names.append(name)
 
     return success_names

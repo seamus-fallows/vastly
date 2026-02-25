@@ -7,6 +7,8 @@ import socket
 import subprocess
 from pathlib import Path
 
+from vastly import dim
+
 SSH_CONFIG_DIR = Path.home() / ".ssh" / "vast.d"
 
 # Quick probes (echo ok, test -f, find): fail fast on dead connections
@@ -47,11 +49,11 @@ def ensure_ssh_include() -> None:
         content = ssh_config.read_text(encoding="utf-8")
         if not re.search(r"Include\s+vast\.d[/\\]\*", content):
             ssh_config.write_text(f"{include_line}\n{content}", encoding="utf-8")
-            print(f"\033[90mAdded '{include_line}' to {ssh_config}\033[0m")
+            print(dim(f"Added '{include_line}' to {ssh_config}"))
     else:
         ssh_dir.mkdir(parents=True, exist_ok=True)
         ssh_config.write_text(include_line + "\n", encoding="utf-8")
-        print(f"\033[90mCreated {ssh_config} with '{include_line}'\033[0m")
+        print(dim(f"Created {ssh_config} with '{include_line}'"))
 
 
 def write_ssh_config(name: str, *, host: str, port: int, user: str,

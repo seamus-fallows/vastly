@@ -7,6 +7,8 @@ import sys
 from importlib import resources
 from pathlib import Path
 
+from vastly import red
+
 CONFIG_PATH = Path.home() / ".vastly.json"
 
 DEFAULTS = {
@@ -34,7 +36,7 @@ def load_config(path: Path | None = None) -> dict:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        print(f"\033[31mInvalid JSON in {path}: {e}\033[0m")
+        print(red(f"Invalid JSON in {path}: {e}"))
         print("Fix the file or delete it to regenerate from template.")
         sys.exit(1)
 

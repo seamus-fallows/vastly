@@ -7,6 +7,7 @@ import re
 import subprocess
 from datetime import datetime, timezone
 
+from vastly import dim, green, red, yellow
 from vastly.ssh import (
     SSH_CONFIG_DIR,
     cached_config_names,
@@ -26,9 +27,9 @@ def fetch_instances() -> list[dict] | None:
     )
     if result.returncode != 0:
         if result.stderr.strip():
-            print(f"\033[31mvastai: {result.stderr.strip()}\033[0m")
+            print(red(f"vastai: {result.stderr.strip()}"))
         else:
-            print("\033[31mvastai command failed. Is your API key set? Run: vastai set api-key <key>\033[0m")
+            print(red("vastai command failed. Is your API key set? Run: vastai set api-key <key>"))
         return None
     try:
         data = json.loads(result.stdout)
@@ -87,13 +88,13 @@ def sync_instances(config: dict) -> list[dict] | None:
     ensure_ssh_include()
     SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("\033[90mSyncing instances...\033[0m")
+    print(dim("Syncing instances..."))
     all_instances = fetch_instances()
 
     if all_instances is None:
         cached = cached_config_names()
         if cached:
-            print("\033[33mAPI unreachable -- using cached configs.\033[0m")
+            print(yellow("API unreachable -- using cached configs."))
             return [
                 {"name": n, "cached": True, "id": None, "dph_total": 0,
                  "gpu_name": "", "num_gpus": 0, "start_date": None}
@@ -154,10 +155,10 @@ def get_synced_instances(config: dict) -> list[dict] | None:
     """Sync and return instances, printing messages for empty/error cases."""
     result = sync_instances(config)
     if result is None:
-        print("\033[31mNo running instances found and API unreachable.\033[0m")
+        print(red("No running instances found and API unreachable."))
         return None
     if not result:
-        print("\033[33mNo running Vast instances.\033[0m")
+        print(yellow("No running Vast instances."))
         return None
     return result
 
@@ -166,7 +167,7 @@ def show_table(instances: list[dict]) -> None:
     """Print a compact instance table."""
     for inst in instances:
         if inst["cached"]:
-            print(f"  {inst['name']}  \033[90m(cached)\033[0m")
+            print(f"  {inst['name']}  {dim('(cached)')}")
         else:
             cost = f"${inst['dph_total']:.2f}/hr"
             uptime = format_uptime(inst["start_date"])
@@ -181,7 +182,7 @@ def select_instance(instances: list[dict], name: str | None = None) -> list[dict
     if name:
         match = [i for i in instances if i["name"] == name]
         if not match:
-            print(f"\033[31mNo instance named '{name}'. Available: {', '.join(names)}\033[0m")
+            print(red(f"No instance named '{name}'. Available: {', '.join(names)}"))
             return []
         return match
 

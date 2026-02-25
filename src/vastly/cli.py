@@ -6,7 +6,7 @@ import argparse
 import shutil
 import subprocess
 
-from vastly import __version__
+from vastly import __version__, green, red, yellow
 from vastly.config import load_config
 from vastly.ide import check_ide, open_ide
 from vastly.instance import get_synced_instances, select_instance, show_table
@@ -19,19 +19,19 @@ def _check_prerequisites(*, need_ide: bool = False, ide: str) -> bool:
     ok = True
 
     if not shutil.which("vastai"):
-        print("\033[31mMissing: vastai CLI. Install with: pip install vastai\033[0m")
+        print(red("Missing: vastai CLI. Install with: pip install vastai"))
         ok = False
     if not shutil.which("git"):
-        print("\033[31mMissing: git. Install from https://git-scm.com\033[0m")
+        print(red("Missing: git. Install from https://git-scm.com"))
         ok = False
     if not shutil.which("ssh"):
-        print("\033[31mMissing: ssh.\033[0m")
+        print(red("Missing: ssh."))
         ok = False
     if need_ide and not check_ide(ide):
         urls = {"code": "https://code.visualstudio.com", "cursor": "https://cursor.com"}
         url = urls.get(ide, "")
         hint = f" Download from {url}" if url else ""
-        print(f"\033[31mMissing: {ide}.{hint}\033[0m")
+        print(red(f"Missing: {ide}.{hint}"))
         ok = False
 
     return ok
@@ -78,8 +78,8 @@ def _connect(name: str | None, no_setup: bool) -> None:
         if no_setup or not repo_info:
             # Skip setup -- open workspace root
             if not repo_info and not no_setup:
-                print(f"  \033[33mNot in a git repo. Tip: run vst from inside a git repo to auto-setup.\033[0m")
-            print(f"  \033[32mOpening {config['workspace']}\033[0m")
+                print(yellow("  Not in a git repo. Tip: run vst from inside a git repo to auto-setup."))
+            print(green(f"  Opening {config['workspace']}"))
             open_ide(config["ide"], inst_name, config["workspace"])
             continue
 
@@ -90,11 +90,11 @@ def _connect(name: str | None, no_setup: bool) -> None:
         result = run_ssh(inst_name, f"test -f ~/.vastly/setup/{repo_name}.json && echo done")
 
         if result.returncode != 0:
-            print(f"  \033[31m{inst_name}: unreachable via SSH.\033[0m")
+            print(red(f"  {inst_name}: unreachable via SSH."))
             continue
 
         if result.stdout.strip() == "done":
-            print(f"  \033[32mOpening {remote_path}\033[0m")
+            print(green(f"  Opening {remote_path}"))
             open_ide(config["ide"], inst_name, remote_path)
             continue
 
