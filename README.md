@@ -15,6 +15,8 @@ Connect to Vast.ai GPU instances from your terminal: sync SSH configs, set up yo
 pip install vastly
 ```
 
+This gives you two equivalent commands: `vastly` and `vst` (shorthand). All examples below use `vst`.
+
 ## Usage
 
 ```sh

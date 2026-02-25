@@ -33,6 +33,7 @@ Issues = "https://github.com/seamus-fallows/vastly/issues"
 
 [project.scripts]
 vst = "vastly.cli:main"
+vastly = "vastly.cli:main"
 
 [tool.hatch.version]
 path = "src/vastly/__init__.py"

@@ -35,6 +35,7 @@ def load_config(path: Path | None = None) -> dict:
         path.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
         print(f"Created config at {path}")
         print("Edit it to change IDE, SSH key, port forwarding, and more.")
+        print("Tip: you can also run this command as `vst` for short.")
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))

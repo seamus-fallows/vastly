@@ -112,6 +112,7 @@ def main() -> None:
         prog="vst",
         description="Connect to a Vast.ai instance -- sync SSH, set up your project, and open your IDE.",
         epilog=(
+            "alias:         `vastly` and `vst` are the same command\n"
             "prerequisites: vastai CLI (pip install vastai), git, ssh, VS Code or Cursor\n"
             "config:        ~/.vastly.json (created on first run)\n"
             "docs:          https://github.com/seamus-fallows/vastly"
