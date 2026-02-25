@@ -24,7 +24,9 @@ vst                  # checks setup -> opens IDE (sets up on first run)
 
 ```sh
 vst 1xRTX4090-TW    # target a specific instance by name
-vst --no-setup       # open IDE on the remote without cloning or installing anything
+vst --no-setup       # open IDE without cloning or installing anything
+vst --force-setup    # re-run remote setup even if already done
+vst --list           # list instances and exit
 vst --version        # show version
 ```
 
@@ -50,7 +52,7 @@ The setup script ([setup-remote.sh](src/vastly/data/setup-remote.sh)):
 
 - Disables auto-tmux (on by default, configurable)
 - Configures git identity from your local `git config`
-- Adds `github.com` to SSH known hosts
+- Adds the git host to SSH known hosts (extracted from repo URL)
 - Clones your repo into the workspace
 - Installs Python dependencies (auto-detected)
 - Runs any configured post-install commands
