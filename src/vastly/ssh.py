@@ -90,6 +90,7 @@ def write_ssh_config(
         "    ForwardAgent yes",
         "    StrictHostKeyChecking no",
         "    UserKnownHostsFile /dev/null",
+        "    LogLevel ERROR",
     ]
 
     if key_path:

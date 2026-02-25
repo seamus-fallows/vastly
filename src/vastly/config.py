@@ -27,7 +27,12 @@ _STRING_KEYS = {"ide", "sshUser", "workspace", "gitRemote"}
 
 
 def load_config(path: Path | None = None) -> dict:
-    """Load config from disk, creating from template if missing."""
+    """Load config from disk, creating from template if missing.
+
+    TODO: support per-project .vastly.json in the repo root that overrides
+    the global config (project-specific: postInstall, installCommand, workspace,
+    portForwards; user-specific: ide, sshKeyPath, sshUser).
+    """
     path = path or CONFIG_PATH
 
     if not path.exists():
