@@ -43,7 +43,6 @@ def load_config(path: Path | None = None) -> dict:
         print("Fix the file or delete it to regenerate from template.")
         sys.exit(1)
 
-    # User values override defaults; None (or empty string for text keys) = use default
     config = {}
     for k, v in DEFAULTS.items():
         user_val = raw.get(k)
@@ -52,7 +51,6 @@ def load_config(path: Path | None = None) -> dict:
         else:
             config[k] = user_val
 
-    # Normalize: accept single string for postInstall
     if isinstance(config["postInstall"], str):
         config["postInstall"] = [config["postInstall"]]
 

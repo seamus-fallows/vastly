@@ -263,12 +263,12 @@ class TestUrlConversion:
 
     def test_extracts_repo_name_from_ssh_url(self):
         url = convert_to_ssh_url("git@github.com:user/my-project.git")
-        name = url.rsplit("/", 1)[-1].removesuffix(".git")
+        name = url.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
         assert name == "my-project"
 
     def test_extracts_repo_name_without_git_suffix(self):
         url = convert_to_ssh_url("https://github.com/user/repo")
-        name = url.rsplit("/", 1)[-1].removesuffix(".git")
+        name = url.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
         assert name == "repo"
 
 

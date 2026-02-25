@@ -6,7 +6,6 @@ import sys
 
 
 def check_ide(ide: str) -> bool:
-    """Return True if *ide* is found on PATH."""
     return shutil.which(ide) is not None
 
 

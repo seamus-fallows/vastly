@@ -122,7 +122,6 @@ def sync_instances(config: dict) -> list[dict] | None:
         except (KeyError, IndexError, TypeError):
             continue
 
-        # Build local port forwards
         local_forwards = []
         for pf in config["portForwards"]:
             local_port = find_available_port(int(pf["local"]), used_ports)
@@ -193,7 +192,7 @@ def select_instance(instances: list[dict], name: str | None = None) -> list[dict
     print("Select instance:")
     for i, n in enumerate(names):
         print(f"  [{i + 1}] {n}")
-    print(f"  [a] All")
+    print("  [a] All")
 
     try:
         choice = input("Choice: ").strip().lower()

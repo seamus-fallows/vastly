@@ -13,12 +13,6 @@ from vastly import __version__, cyan, green, red, yellow
 from vastly.ssh import run_scp, run_ssh
 
 
-def _setup_script_path() -> Path:
-    """Return the path to the bundled setup-remote.sh."""
-    ref = resources.files("vastly.data").joinpath("setup-remote.sh")
-    return Path(str(ref))
-
-
 def convert_to_ssh_url(url: str) -> str:
     """Convert an HTTPS git URL to SSH format."""
     m = re.match(r"https://([^/]+)/(.+?)/?$", url)
@@ -45,7 +39,7 @@ def setup_instances(
         capture_output=True, text=True,
     ).stdout.strip()
 
-    setup_script = _setup_script_path()
+    setup_script = Path(str(resources.files("vastly.data").joinpath("setup-remote.sh")))
     if not setup_script.exists():
         print(red(f"Setup script not found at {setup_script}"))
         return []
