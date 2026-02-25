@@ -129,6 +129,15 @@ class TestLoadConfig:
 
         assert result["postInstall"] == []
 
+    def test_empty_string_falls_back_to_default(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"ide": "", "workspace": ""}', encoding="utf-8")
+
+        result = load_config(cfg)
+
+        assert result["ide"] == "code"
+        assert result["workspace"] == "/workspace"
+
     def test_exits_on_invalid_json(self, tmp_path):
         cfg = tmp_path / ".vastly.json"
         cfg.write_text("{invalid json}", encoding="utf-8")
@@ -434,6 +443,15 @@ class TestSshConfigManagement:
         names = cached_config_names()
 
         assert set(names) == {"1xRTX4090-TW", "US-2xA100"}
+
+    def test_cached_names_excludes_known_hosts(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
+        (tmp_path / "1xRTX4090-TW").write_text("config")
+        (tmp_path / "known_hosts").write_text("host keys")
+
+        names = cached_config_names()
+
+        assert names == ["1xRTX4090-TW"]
 
     def test_cached_names_empty_when_dir_missing(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path / "nonexistent")

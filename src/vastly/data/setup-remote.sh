@@ -54,12 +54,13 @@ log "Configuring git identity: ${GIT_NAME} <${GIT_EMAIL}>"
 git config --global user.name "$GIT_NAME"
 git config --global user.email "$GIT_EMAIL"
 
-# ── Step 3: GitHub known hosts ─────────────────────────────────────────
+# ── Step 3: Git host known keys ───────────────────────────────────────
 
-if ! grep -q "^github.com " ~/.ssh/known_hosts 2>/dev/null; then
-    log "Adding github.com to known_hosts"
+REPO_HOST=$(echo "$REPO_URL" | sed -n 's/.*@\([^:]*\).*/\1/p')
+if [[ -n "$REPO_HOST" ]] && ! grep -q "^${REPO_HOST} " ~/.ssh/known_hosts 2>/dev/null; then
+    log "Adding ${REPO_HOST} to known_hosts"
     mkdir -p ~/.ssh
-    ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+    ssh-keyscan "$REPO_HOST" >> ~/.ssh/known_hosts 2>/dev/null
 fi
 
 # ── Step 4: Clone ──────────────────────────────────────────────────────

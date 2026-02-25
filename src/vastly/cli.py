@@ -54,7 +54,7 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     if not repo_url:
         return None
     repo_url = convert_to_ssh_url(repo_url)
-    repo_name = repo_url.rsplit("/", 1)[-1].removesuffix(".git")
+    repo_name = repo_url.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
     return repo_url, repo_name
 
 
