@@ -1,4 +1,4 @@
-"""Tests for vastly -- ported from Vastly.Tests.ps1."""
+"""Tests for vastly."""
 
 from __future__ import annotations
 
