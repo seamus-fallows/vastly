@@ -111,8 +111,11 @@ def main() -> None:
     )
     parser.add_argument("name", nargs="?", help="instance name (tab-complete from ~/.ssh/vast.d/)")
     parser.add_argument("--list", action="store_true", help="list instances and exit")
-    parser.add_argument("--no-setup", action="store_true", help="open IDE without cloning or installing")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
 
+    setup_group = parser.add_mutually_exclusive_group()
+    setup_group.add_argument("--no-setup", action="store_true", help="open IDE without cloning or installing")
+    setup_group.add_argument("--force-setup", action="store_true", help="re-run remote setup even if already done")
+
     args = parser.parse_args()
-    _connect(args.name, no_setup=args.no_setup, force_setup=False, list_only=args.list)
+    _connect(args.name, no_setup=args.no_setup, force_setup=args.force_setup, list_only=args.list)
