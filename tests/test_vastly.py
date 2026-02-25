@@ -240,11 +240,17 @@ class TestUrlConversion:
     def test_converts_github_https_to_ssh(self):
         assert convert_to_ssh_url("https://github.com/user/repo.git") == "git@github.com:user/repo.git"
 
+    def test_converts_gitlab_https_to_ssh(self):
+        assert convert_to_ssh_url("https://gitlab.com/user/repo.git") == "git@gitlab.com:user/repo.git"
+
+    def test_converts_self_hosted_https_to_ssh(self):
+        assert convert_to_ssh_url("https://git.example.com/org/repo.git") == "git@git.example.com:org/repo.git"
+
+    def test_strips_trailing_slash(self):
+        assert convert_to_ssh_url("https://github.com/user/repo/") == "git@github.com:user/repo"
+
     def test_leaves_ssh_urls_unchanged(self):
         assert convert_to_ssh_url("git@github.com:user/repo.git") == "git@github.com:user/repo.git"
-
-    def test_leaves_non_github_unchanged(self):
-        assert convert_to_ssh_url("https://gitlab.com/user/repo.git") == "https://gitlab.com/user/repo.git"
 
     def test_extracts_repo_name_from_ssh_url(self):
         url = convert_to_ssh_url("git@github.com:user/my-project.git")

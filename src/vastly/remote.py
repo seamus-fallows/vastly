@@ -20,10 +20,10 @@ def _setup_script_path() -> Path:
 
 
 def convert_to_ssh_url(url: str) -> str:
-    """Convert a GitHub HTTPS URL to an SSH URL."""
-    m = re.match(r"https://github\.com/(.+)", url)
+    """Convert an HTTPS git URL to SSH format."""
+    m = re.match(r"https://([^/]+)/(.+?)/?$", url)
     if m:
-        return f"git@github.com:{m.group(1)}"
+        return f"git@{m.group(1)}:{m.group(2)}"
     return url
 
 
