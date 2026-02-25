@@ -1,6 +1,7 @@
 *.claude
 .vscode/
 .vastly.json
+publish.txt
 
 # Python
 __pycache__/
