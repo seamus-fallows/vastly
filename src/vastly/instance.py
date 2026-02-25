@@ -41,7 +41,7 @@ def fetch_instances() -> list[dict] | None:
     return data
 
 
-def build_instance_name(inst: dict, seen: dict[str, bool]) -> str:
+def build_instance_name(inst: dict, seen: set[str]) -> str:
     """Generate a human-readable name like '1xRTX4090-TW'.
 
     Appends the instance ID on collision.
@@ -58,7 +58,7 @@ def build_instance_name(inst: dict, seen: dict[str, bool]) -> str:
     if base in seen:
         name = f"{base}-{inst['id']}"
     else:
-        seen[base] = True
+        seen.add(base)
         name = base
 
     return name
@@ -109,7 +109,7 @@ def sync_instances(config: dict) -> list[dict] | None:
     if not running:
         return []
 
-    seen: dict[str, bool] = {}
+    seen: set[str] = set()
     used_ports: set[int] = set()
     results = []
 
@@ -125,7 +125,7 @@ def sync_instances(config: dict) -> list[dict] | None:
         # Build local port forwards
         local_forwards = []
         for pf in config["portForwards"]:
-            local_port = find_available_port(int(pf["local"]) + len(results), used_ports)
+            local_port = find_available_port(int(pf["local"]), used_ports)
             used_ports.add(local_port)
             local_forwards.append((local_port, int(pf["remote"])))
 

@@ -206,24 +206,24 @@ class TestInstanceNaming:
 
     def test_country_gpu_format(self):
         inst = {"gpu_name": "RTX 4090", "num_gpus": 1, "geolocation": "Taipei, TW", "id": 111}
-        seen = {}
+        seen = set()
         assert build_instance_name(inst, seen) == "1xRTX4090-TW"
 
     def test_omits_country_when_empty(self):
         inst = {"gpu_name": "A100", "num_gpus": 2, "geolocation": "", "id": 111}
-        seen = {}
+        seen = set()
         assert build_instance_name(inst, seen) == "2xA100"
 
     def test_strips_spaces_from_gpu(self):
         inst = {"gpu_name": "GeForce RTX 3060", "num_gpus": 1, "geolocation": "", "id": 111}
-        seen = {}
+        seen = set()
         name = build_instance_name(inst, seen)
         assert " " not in name
 
     def test_appends_id_on_collision(self):
         inst1 = {"gpu_name": "RTX 4090", "num_gpus": 1, "geolocation": "Taipei, TW", "id": 111}
         inst2 = {"gpu_name": "RTX 4090", "num_gpus": 1, "geolocation": "Taipei, TW", "id": 222}
-        seen = {}
+        seen = set()
         name1 = build_instance_name(inst1, seen)
         name2 = build_instance_name(inst2, seen)
         assert name1 == "1xRTX4090-TW"
@@ -231,7 +231,7 @@ class TestInstanceNaming:
 
     def test_handles_missing_geolocation_key(self):
         inst = {"gpu_name": "A100", "num_gpus": 1, "id": 111}
-        seen = {}
+        seen = set()
         assert build_instance_name(inst, seen) == "1xA100"
 
 

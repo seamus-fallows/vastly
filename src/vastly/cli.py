@@ -40,12 +40,18 @@ def _check_prerequisites(*, need_ide: bool = False, ide: str) -> bool:
 def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     """Return (repo_url, repo_name) from the local git repo, or None."""
     try:
-        repo_url = subprocess.run(
+        result = subprocess.run(
             ["git", "remote", "get-url", git_remote],
             capture_output=True, text=True,
-        ).stdout.strip()
+        )
     except FileNotFoundError:
         return None
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        if stderr and "not a git repository" not in stderr.lower():
+            print(red(f"git: {stderr}"))
+        return None
+    repo_url = result.stdout.strip()
     if not repo_url:
         return None
     repo_url = convert_to_ssh_url(repo_url)
