@@ -347,11 +347,10 @@ class TestModuleVersion:
     def test_version_is_semver(self):
         assert re.match(r"^\d+\.\d+\.\d+$", __version__)
 
-    def test_version_matches_pyproject(self):
+    def test_version_is_dynamic_in_pyproject(self):
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-        m = re.search(r'version\s*=\s*"([^"]+)"', pyproject)
-        assert m
-        assert __version__ == m.group(1)
+        assert 'dynamic = ["version"]' in pyproject
+        assert 'path = "src/vastly/__init__.py"' in pyproject
 
 
 class TestFileEncoding:

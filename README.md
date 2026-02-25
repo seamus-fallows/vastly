@@ -7,7 +7,6 @@ Connect to Vast.ai GPU instances from your terminal: sync SSH configs, set up yo
 - Python 3.9+
 - [Vast.ai CLI](https://vast.ai/docs/cli/getting-started) (`pip install vastai`) with API key configured
 - Git
-- SSH
 - [VS Code](https://code.visualstudio.com) or [Cursor](https://cursor.com) with the Remote-SSH extension
 
 ## Install
