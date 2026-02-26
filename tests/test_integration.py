@@ -9,7 +9,11 @@ They require:
 Run with:
     pytest tests/test_integration.py -v
 
-Remote setup tests clone the current repo's origin remote by default.
+Remote setup tests (TestRemoteSetup) modify remote state -- they clone a
+repo, write markers, patch bashrc, and set git identity. These are skipped
+by default. Run them on a disposable instance with:
+
+    VASTLY_DESTRUCTIVE=1 pytest tests/test_integration.py -v
 
 Cost: requires an active Vast.ai instance. These tests do NOT create or
 destroy instances -- they use whatever is currently running.
@@ -18,6 +22,7 @@ destroy instances -- they use whatever is currently running.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -157,10 +162,16 @@ class TestRemoteEnvironment:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    "VASTLY_DESTRUCTIVE" not in os.environ,
+    reason="Modifies remote state. Run with: VASTLY_DESTRUCTIVE=1 pytest tests/test_integration.py",
+)
 class TestRemoteSetup:
     """Test the full setup pipeline on a real instance.
 
     Clones the current repo's origin remote via SSH agent forwarding.
+    Modifies bashrc, git identity, and clones a repo on the remote.
+    Run only on disposable instances.
     """
 
     def test_fresh_setup(self, live_instance, test_repo):
