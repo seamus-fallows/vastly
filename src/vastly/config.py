@@ -30,19 +30,42 @@ _STRING_KEYS = {"ide", "sshUser", "workspace", "gitRemote"}
 _PROJECT_KEYS = {"postInstall", "installCommand", "workspace", "portForwards", "copyFiles", "gitRemote"}
 
 
-def _detect_ide() -> str:
-    """Detect which IDE the user likely wants.
+def _ide_from_env() -> str | None:
+    """Detect the current IDE from environment variables.
 
-    Checks TERM_PROGRAM first (set by IDE integrated terminals),
-    then falls back to what's installed.
+    Returns "code", "cursor", or None if not inside an IDE terminal.
     """
-    term = os.environ.get("TERM_PROGRAM", "").lower()
-    if "cursor" in term:
+    # Cursor sets CURSOR_TRACE_ID in all its terminals.  Check this first
+    # because Cursor also sets TERM_PROGRAM=vscode (it's a VS Code fork).
+    if os.environ.get("CURSOR_TRACE_ID"):
         return "cursor"
+
+    term = os.environ.get("TERM_PROGRAM", "").lower()
     if "vscode" in term:
         return "code"
 
-    # TERM_PROGRAM not set (e.g. external terminal on Windows) -- check what's installed
+    # Windows fallback: check VSCODE_* paths for "cursor" vs "Code".
+    for key in ("VSCODE_GIT_ASKPASS_MAIN", "VSCODE_CODE_CACHE_PATH"):
+        val = os.environ.get(key, "")
+        if not val:
+            continue
+        if "cursor" in val.lower():
+            return "cursor"
+        return "code"
+
+    return None
+
+
+def _detect_ide() -> str:
+    """Detect which IDE the user likely wants.
+
+    Checks terminal environment first, then falls back to what's installed.
+    """
+    from_env = _ide_from_env()
+    if from_env:
+        return from_env
+
+    # Not inside an IDE terminal -- check what's installed
     has_code = shutil.which("code") is not None
     has_cursor = shutil.which("cursor") is not None
     if has_cursor and not has_code:
@@ -89,13 +112,9 @@ def load_config(
             config[k] = user_val
 
     # Auto-detect IDE from terminal environment (overrides config when inside an IDE).
-    # Only override if the detected IDE is actually installed -- TERM_PROGRAM can be
-    # inherited from a parent process even when the CLI isn't available.
-    term = os.environ.get("TERM_PROGRAM", "").lower()
-    if "cursor" in term and shutil.which("cursor"):
-        config["ide"] = "cursor"
-    elif "vscode" in term and shutil.which("code"):
-        config["ide"] = "code"
+    env_ide = _ide_from_env()
+    if env_ide:
+        config["ide"] = env_ide
 
     if isinstance(config["postInstall"], str):
         config["postInstall"] = [config["postInstall"]]

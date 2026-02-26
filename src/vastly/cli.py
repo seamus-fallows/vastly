@@ -155,10 +155,10 @@ def main() -> None:
 
     setup_group = parser.add_mutually_exclusive_group()
     setup_group.add_argument(
-        "--no-setup", action="store_true", help="open IDE without cloning or installing"
+        "-n", "--no-setup", action="store_true", help="open IDE without cloning or installing"
     )
     setup_group.add_argument(
-        "--force-setup",
+        "-f", "--force-setup",
         action="store_true",
         help="re-run remote setup even if already done",
     )

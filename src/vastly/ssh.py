@@ -130,10 +130,16 @@ def run_ssh(
     opts = SSH_SETUP_OPTS if setup else SSH_OPTS
     cmd = ["ssh", *opts, host, command]
 
-    if stream:
-        return subprocess.run(cmd)
+    # Hard timeout: SSH options cover TCP connect and keepalives, but not
+    # handshake stalls.  Probe commands get 30s; setup scripts get 10min.
+    deadline = 600 if setup else 30
 
-    return subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        if stream:
+            return subprocess.run(cmd, timeout=deadline)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=deadline)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="timeout")
 
 
 def run_scp(
@@ -142,8 +148,15 @@ def run_scp(
     """SCP a file from *src* to *dest*."""
     opts = SSH_SETUP_OPTS if setup else SSH_OPTS
     flags = ["-r"] if recursive else []
-    return subprocess.run(
-        ["scp", *flags, *opts, src, dest],
-        capture_output=True,
-        text=True,
-    )
+    deadline = 600 if setup else 60
+    try:
+        return subprocess.run(
+            ["scp", *flags, *opts, src, dest],
+            capture_output=True,
+            text=True,
+            timeout=deadline,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            ["scp", src, dest], returncode=1, stdout="", stderr="timeout"
+        )

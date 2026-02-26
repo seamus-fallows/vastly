@@ -1,6 +1,6 @@
 import sys
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 _COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 

@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from vastly import __version__, cyan, dim, green, red, yellow
-from vastly.config import _detect_ide, load_config
+from vastly.config import _detect_ide, _ide_from_env, load_config
 from vastly.instance import build_instance_name, format_uptime, select_instance
 from vastly.ssh import (
     cached_config_names,
@@ -66,13 +66,51 @@ class TestFormatUptime:
         assert format_uptime("") == "?"
 
 
+class TestIdeFromEnv:
+    _ENV_VARS = (
+        "CURSOR_TRACE_ID", "TERM_PROGRAM",
+        "VSCODE_GIT_ASKPASS_MAIN", "VSCODE_CODE_CACHE_PATH",
+    )
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        for var in self._ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    def test_cursor_trace_id(self, monkeypatch):
+        monkeypatch.setenv("CURSOR_TRACE_ID", "abc123")
+        assert _ide_from_env() == "cursor"
+
+    def test_cursor_trace_id_beats_term_program(self, monkeypatch):
+        """Cursor sets TERM_PROGRAM=vscode, but CURSOR_TRACE_ID wins."""
+        monkeypatch.setenv("CURSOR_TRACE_ID", "abc123")
+        monkeypatch.setenv("TERM_PROGRAM", "vscode")
+        assert _ide_from_env() == "cursor"
+
+    def test_term_program_vscode(self, monkeypatch):
+        monkeypatch.setenv("TERM_PROGRAM", "vscode")
+        assert _ide_from_env() == "code"
+
+    def test_vscode_askpass_path_detects_cursor(self, monkeypatch):
+        monkeypatch.setenv("VSCODE_GIT_ASKPASS_MAIN", r"C:\Program Files\cursor\resources\app\extensions\git\dist\askpass-main.js")
+        assert _ide_from_env() == "cursor"
+
+    def test_vscode_cache_path_detects_code(self, monkeypatch):
+        monkeypatch.setenv("VSCODE_CODE_CACHE_PATH", r"C:\Users\x\AppData\Roaming\Code\CachedData\abc")
+        assert _ide_from_env() == "code"
+
+    def test_returns_none_outside_ide(self, monkeypatch):
+        assert _ide_from_env() is None
+
+
 class TestDetectIde:
     @pytest.fixture(autouse=True)
     def _clean_env(self, monkeypatch):
-        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+        for var in TestIdeFromEnv._ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
 
     def test_cursor_terminal(self, monkeypatch):
-        monkeypatch.setenv("TERM_PROGRAM", "cursor")
+        monkeypatch.setenv("CURSOR_TRACE_ID", "abc")
         assert _detect_ide() == "cursor"
 
     def test_vscode_terminal(self, monkeypatch):
@@ -100,7 +138,8 @@ class TestLoadConfig:
     @pytest.fixture(autouse=True)
     def _clean_env(self, monkeypatch):
         """Prevent the host IDE terminal from affecting config tests."""
-        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+        for var in TestIdeFromEnv._ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
 
     def test_defaults_on_empty_json(self, tmp_path):
         cfg = tmp_path / ".vastly.json"
@@ -285,32 +324,21 @@ class TestLoadConfig:
         result = load_config(cfg, project_dir=project_dir)
         assert result["installCommand"] == "uv sync"
 
-    def test_term_program_overrides_config_to_cursor(self, tmp_path, monkeypatch):
+    def test_env_overrides_config_to_cursor(self, tmp_path, monkeypatch):
         cfg = tmp_path / ".vastly.json"
         cfg.write_text('{"ide": "code"}', encoding="utf-8")
-        monkeypatch.setenv("TERM_PROGRAM", "cursor")
-        monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setenv("CURSOR_TRACE_ID", "abc")
         result = load_config(cfg)
         assert result["ide"] == "cursor"
 
-    def test_term_program_overrides_config_to_code(self, tmp_path, monkeypatch):
+    def test_env_overrides_config_to_code(self, tmp_path, monkeypatch):
         cfg = tmp_path / ".vastly.json"
         cfg.write_text('{"ide": "cursor"}', encoding="utf-8")
         monkeypatch.setenv("TERM_PROGRAM", "vscode")
-        monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
         result = load_config(cfg)
         assert result["ide"] == "code"
 
-    def test_term_program_no_override_when_ide_missing(self, tmp_path, monkeypatch):
-        """TERM_PROGRAM says vscode, but code isn't installed -- keep config value."""
-        cfg = tmp_path / ".vastly.json"
-        cfg.write_text('{"ide": "cursor"}', encoding="utf-8")
-        monkeypatch.setenv("TERM_PROGRAM", "vscode")
-        monkeypatch.setattr("shutil.which", lambda cmd: None)
-        result = load_config(cfg)
-        assert result["ide"] == "cursor"
-
-    def test_term_program_unset_uses_config_value(self, tmp_path, monkeypatch):
+    def test_no_env_uses_config_value(self, tmp_path, monkeypatch):
         cfg = tmp_path / ".vastly.json"
         cfg.write_text('{"ide": "cursor"}', encoding="utf-8")
         monkeypatch.delenv("TERM_PROGRAM", raising=False)

@@ -96,8 +96,9 @@ mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
 
 if [[ -d "$REPO_NAME" ]]; then
-    log "Repo already exists, skipping clone"
+    log "Repo already exists, pulling latest changes"
     cd "$REPO_NAME"
+    git pull --ff-only 2>/dev/null || warn "git pull failed -- continuing with existing code"
 else
     log "Cloning ${REPO_URL} into ${REPO_DIR}"
     git clone "$REPO_URL" "$REPO_NAME" || die "git clone failed"

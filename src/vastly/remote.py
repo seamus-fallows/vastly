@@ -44,15 +44,24 @@ def setup_instances(
     disable_tmux = "true" if config["disableAutoTmux"] else "false"
     success_names = []
 
+    q_repo = shlex.quote(repo_name)
+
     for inst in instances:
         name = inst["name"]
         print(f"  {name}: ", end="", flush=True)
 
-        # SSH retry loop -- instances may still be booting
+        # Combined reachability + marker check in a single SSH connection.
+        # "|| true" ensures exit 0 whenever SSH connects (even if file is missing).
+        # If force_setup, delete the marker so the cat returns empty.
+        marker_cmd = f"cat ~/.vastly/setup/{q_repo}.json 2>/dev/null || true"
+        if force_setup:
+            marker_cmd = f"rm -f ~/.vastly/setup/{q_repo}.json"
+
         reachable = False
+        marker_data = None
         for attempt in range(1, 4):
-            result = run_ssh(name, "echo ok")
-            if result.returncode == 0:
+            marker = run_ssh(name, marker_cmd)
+            if marker.returncode == 0:
                 reachable = True
                 break
             if attempt < 3:
@@ -63,19 +72,16 @@ def setup_instances(
             print(red("unreachable after 3 attempts."))
             continue
 
-        if force_setup:
-            run_ssh(name, f"rm -f ~/.vastly/setup/{shlex.quote(repo_name)}.json")
-
-        marker = run_ssh(name, f"cat ~/.vastly/setup/{shlex.quote(repo_name)}.json 2>/dev/null")
-        if marker.returncode == 0 and marker.stdout.strip():
+        # Check if marker indicates setup is already done
+        if not force_setup and marker.stdout.strip():
             try:
                 marker_data = json.loads(marker.stdout)
-                if marker_data.get("repoUrl") == repo_url:
-                    print(green("already set up."))
-                    success_names.append(name)
-                    continue
             except (json.JSONDecodeError, KeyError):
                 pass  # Corrupted or old-format marker -- re-run setup
+            if marker_data and marker_data.get("repoUrl") == repo_url:
+                print(green("already set up."))
+                success_names.append(name)
+                continue
 
         # Setup is needed -- git identity required
         if not git_name or not git_email:
