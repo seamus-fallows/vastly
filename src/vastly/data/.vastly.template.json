@@ -9,8 +9,9 @@
     }
   ],
   "workspace": "/workspace",
-  "disableAutoTmux": true,
+  "disableAutoTmux": false,
   "gitRemote": "origin",
   "postInstall": [],
-  "installCommand": null
+  "installCommand": null,
+  "copyFiles": []
 }

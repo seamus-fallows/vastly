@@ -1,4 +1,5 @@
 """Tests for vastly."""
+# TODO: Add tests for CLI entry point (argument parsing, command routing, error output)
 
 from __future__ import annotations
 
@@ -7,15 +8,15 @@ import re
 import shutil
 import socket
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from vastly import __version__, cyan, dim, green, red, yellow
-from vastly.config import load_config
+from vastly.config import _detect_ide, load_config
 from vastly.instance import build_instance_name, format_uptime, select_instance
-from vastly.remote import convert_to_ssh_url
 from vastly.ssh import (
     cached_config_names,
     clear_ssh_configs,
@@ -65,7 +66,42 @@ class TestFormatUptime:
         assert format_uptime("") == "?"
 
 
+class TestDetectIde:
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+
+    def test_cursor_terminal(self, monkeypatch):
+        monkeypatch.setenv("TERM_PROGRAM", "cursor")
+        assert _detect_ide() == "cursor"
+
+    def test_vscode_terminal(self, monkeypatch):
+        monkeypatch.setenv("TERM_PROGRAM", "vscode")
+        assert _detect_ide() == "code"
+
+    def test_only_cursor_installed(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/cursor" if cmd == "cursor" else None)
+        assert _detect_ide() == "cursor"
+
+    def test_only_code_installed(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/code" if cmd == "code" else None)
+        assert _detect_ide() == "code"
+
+    def test_both_installed_prefers_code(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        assert _detect_ide() == "code"
+
+    def test_neither_installed_defaults_to_code(self, monkeypatch):
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+        assert _detect_ide() == "code"
+
+
 class TestLoadConfig:
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        """Prevent the host IDE terminal from affecting config tests."""
+        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+
     def test_defaults_on_empty_json(self, tmp_path):
         cfg = tmp_path / ".vastly.json"
         cfg.write_text("{}", encoding="utf-8")
@@ -75,7 +111,7 @@ class TestLoadConfig:
         assert result["ide"] == "code"
         assert result["sshUser"] == "root"
         assert result["workspace"] == "/workspace"
-        assert result["disableAutoTmux"] is True
+        assert result["disableAutoTmux"] is False
         assert result["gitRemote"] == "origin"
 
     def test_reads_user_values(self, tmp_path):
@@ -178,6 +214,108 @@ class TestLoadConfig:
         result = load_config(cfg)
         assert result["ide"] == "cursor"
         assert "customKey" not in result
+
+    def test_project_config_overrides_project_keys(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text("{}", encoding="utf-8")
+        project_dir = tmp_path / "repo"
+        project_dir.mkdir()
+        (project_dir / ".vastly.json").write_text(
+            json.dumps({"postInstall": ["make build"], "workspace": "/src"}),
+            encoding="utf-8",
+        )
+        result = load_config(cfg, project_dir=project_dir)
+        assert result["postInstall"] == ["make build"]
+        assert result["workspace"] == "/src"
+
+    def test_project_config_ignores_user_keys(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"ide": "code", "sshUser": "root"}', encoding="utf-8")
+        project_dir = tmp_path / "repo"
+        project_dir.mkdir()
+        (project_dir / ".vastly.json").write_text(
+            json.dumps({"ide": "cursor", "sshUser": "ubuntu", "postInstall": ["echo hi"]}),
+            encoding="utf-8",
+        )
+        result = load_config(cfg, project_dir=project_dir)
+        assert result["ide"] == "code"  # user key -- not overridden
+        assert result["sshUser"] == "root"  # user key -- not overridden
+        assert result["postInstall"] == ["echo hi"]  # project key -- overridden
+
+    def test_missing_project_config_is_noop(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"ide": "cursor"}', encoding="utf-8")
+        project_dir = tmp_path / "repo"
+        project_dir.mkdir()
+        # No .vastly.json in project_dir
+        result = load_config(cfg, project_dir=project_dir)
+        assert result["ide"] == "cursor"
+        assert result["postInstall"] == []
+
+    def test_project_config_wraps_post_install_string(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text("{}", encoding="utf-8")
+        project_dir = tmp_path / "repo"
+        project_dir.mkdir()
+        (project_dir / ".vastly.json").write_text(
+            '{"postInstall": "make test"}', encoding="utf-8"
+        )
+        result = load_config(cfg, project_dir=project_dir)
+        assert result["postInstall"] == ["make test"]
+
+    def test_project_config_empty_string_falls_back_to_global(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"workspace": "/data"}', encoding="utf-8")
+        project_dir = tmp_path / "repo"
+        project_dir.mkdir()
+        (project_dir / ".vastly.json").write_text(
+            '{"workspace": ""}', encoding="utf-8"
+        )
+        result = load_config(cfg, project_dir=project_dir)
+        assert result["workspace"] == "/data"
+
+    def test_project_config_null_falls_back_to_global(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"installCommand": "uv sync"}', encoding="utf-8")
+        project_dir = tmp_path / "repo"
+        project_dir.mkdir()
+        (project_dir / ".vastly.json").write_text(
+            '{"installCommand": null}', encoding="utf-8"
+        )
+        result = load_config(cfg, project_dir=project_dir)
+        assert result["installCommand"] == "uv sync"
+
+    def test_term_program_overrides_config_to_cursor(self, tmp_path, monkeypatch):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"ide": "code"}', encoding="utf-8")
+        monkeypatch.setenv("TERM_PROGRAM", "cursor")
+        monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        result = load_config(cfg)
+        assert result["ide"] == "cursor"
+
+    def test_term_program_overrides_config_to_code(self, tmp_path, monkeypatch):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"ide": "cursor"}', encoding="utf-8")
+        monkeypatch.setenv("TERM_PROGRAM", "vscode")
+        monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        result = load_config(cfg)
+        assert result["ide"] == "code"
+
+    def test_term_program_no_override_when_ide_missing(self, tmp_path, monkeypatch):
+        """TERM_PROGRAM says vscode, but code isn't installed -- keep config value."""
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"ide": "cursor"}', encoding="utf-8")
+        monkeypatch.setenv("TERM_PROGRAM", "vscode")
+        monkeypatch.setattr("shutil.which", lambda cmd: None)
+        result = load_config(cfg)
+        assert result["ide"] == "cursor"
+
+    def test_term_program_unset_uses_config_value(self, tmp_path, monkeypatch):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"ide": "cursor"}', encoding="utf-8")
+        monkeypatch.delenv("TERM_PROGRAM", raising=False)
+        result = load_config(cfg)
+        assert result["ide"] == "cursor"
 
 
 class TestPortHelpers:
@@ -363,48 +501,57 @@ class TestInstanceNaming:
         assert name == "1x"
 
 
-class TestUrlConversion:
-    def test_converts_github_https_to_ssh(self):
-        assert (
-            convert_to_ssh_url("https://github.com/user/repo.git")
-            == "git@github.com:user/repo.git"
+class TestLocalRepoInfo:
+    """Test that _local_repo_info passes URLs through without conversion."""
+
+    def test_https_url_not_converted_to_ssh(self, monkeypatch):
+        """HTTPS URLs should pass through as-is, not be converted to SSH."""
+        https_url = "https://github.com/user/repo.git"
+        monkeypatch.setattr(
+            "vastly.cli.subprocess.run",
+            lambda *a, **kw: type(
+                "R", (), {"returncode": 0, "stdout": https_url, "stderr": ""}
+            )(),
         )
+        from vastly.cli import _local_repo_info
 
-    def test_converts_gitlab_https_to_ssh(self):
-        assert (
-            convert_to_ssh_url("https://gitlab.com/user/repo.git")
-            == "git@gitlab.com:user/repo.git"
+        result = _local_repo_info("origin")
+        assert result is not None
+        url, name = result
+        assert url == https_url
+        assert name == "repo"
+
+    def test_ssh_url_passes_through(self, monkeypatch):
+        ssh_url = "git@github.com:user/repo.git"
+        monkeypatch.setattr(
+            "vastly.cli.subprocess.run",
+            lambda *a, **kw: type(
+                "R", (), {"returncode": 0, "stdout": ssh_url, "stderr": ""}
+            )(),
         )
+        from vastly.cli import _local_repo_info
 
-    def test_converts_self_hosted_https_to_ssh(self):
-        assert (
-            convert_to_ssh_url("https://git.example.com/org/repo.git")
-            == "git@git.example.com:org/repo.git"
+        result = _local_repo_info("origin")
+        assert result is not None
+        url, name = result
+        assert url == ssh_url
+        assert name == "repo"
+
+    def test_https_url_without_dotgit_suffix(self, monkeypatch):
+        https_url = "https://github.com/user/my-project"
+        monkeypatch.setattr(
+            "vastly.cli.subprocess.run",
+            lambda *a, **kw: type(
+                "R", (), {"returncode": 0, "stdout": https_url, "stderr": ""}
+            )(),
         )
+        from vastly.cli import _local_repo_info
 
-    def test_strips_trailing_slash(self):
-        assert (
-            convert_to_ssh_url("https://github.com/user/repo/")
-            == "git@github.com:user/repo"
-        )
-
-    def test_leaves_ssh_urls_unchanged(self):
-        assert (
-            convert_to_ssh_url("git@github.com:user/repo.git")
-            == "git@github.com:user/repo.git"
-        )
-
-    def test_http_url_passes_through(self):
-        """Only https:// is converted, not http://."""
-        url = "http://github.com/user/repo.git"
-        assert convert_to_ssh_url(url) == url
-
-    def test_empty_string_passes_through(self):
-        assert convert_to_ssh_url("") == ""
-
-    def test_nested_gitlab_path(self):
-        result = convert_to_ssh_url("https://gitlab.com/group/subgroup/repo.git")
-        assert result == "git@gitlab.com:group/subgroup/repo.git"
+        result = _local_repo_info("origin")
+        assert result is not None
+        url, name = result
+        assert url == https_url
+        assert name == "my-project"
 
 
 class TestSshConfig:
@@ -521,6 +668,7 @@ class TestConfigTemplate:
             "gitRemote",
             "postInstall",
             "installCommand",
+            "copyFiles",
         }
         assert set(template.keys()) == expected
 
@@ -616,6 +764,36 @@ class TestSshConfigManagement:
         assert cached_config_names() == []
 
 
+class TestRunScp:
+    def test_recursive_flag_added(self, monkeypatch):
+        """run_scp with recursive=True should include -r in the command."""
+        captured_cmd = []
+
+        def fake_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("vastly.ssh.subprocess.run", fake_run)
+        from vastly.ssh import run_scp
+
+        run_scp("/tmp/src", "host:/tmp/dest", recursive=True)
+        assert "-r" in captured_cmd
+
+    def test_no_recursive_flag_by_default(self, monkeypatch):
+        """run_scp without recursive should not include -r."""
+        captured_cmd = []
+
+        def fake_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("vastly.ssh.subprocess.run", fake_run)
+        from vastly.ssh import run_scp
+
+        run_scp("/tmp/src", "host:/tmp/dest")
+        assert "-r" not in captured_cmd
+
+
 class TestSetupRemoteScript:
     def test_bundled_script_exists(self):
         assert (DATA / "setup-remote.sh").exists()
@@ -633,6 +811,127 @@ class TestSetupRemoteScript:
     def test_script_uses_strict_mode(self):
         content = (DATA / "setup-remote.sh").read_text(encoding="utf-8")
         assert "set -euo pipefail" in content
+
+
+class TestSetupMarker:
+    """Test that setup markers store and compare repoUrl correctly."""
+
+    def test_marker_json_includes_repo_url(self):
+        """The setup-remote.sh script should write repoUrl into the marker."""
+        content = (DATA / "setup-remote.sh").read_text(encoding="utf-8")
+        assert '"repoUrl"' in content
+
+    def test_matching_repo_url_skips_setup(self, monkeypatch):
+        """When marker contains the same repoUrl, setup should be skipped."""
+        from vastly.remote import setup_instances
+
+        repo_url = "git@github.com:user/app.git"
+        marker_json = json.dumps({"repoUrl": repo_url, "timestamp": "2025-01-01"})
+
+        ssh_calls = []
+
+        def fake_ssh(name, cmd, **kwargs):
+            ssh_calls.append(cmd)
+            if "echo ok" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
+            if "cat ~/.vastly/setup/" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": marker_json, "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
+        monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
+
+        instances = [{"name": "1xA100-US"}]
+        config = {
+            "installCommand": None,
+            "disableAutoTmux": False,
+            "workspace": "/workspace",
+            "postInstall": [],
+        }
+
+        result = setup_instances(instances, repo_url, "app", config)
+
+        assert result == ["1xA100-US"]
+        # Should NOT have run the setup script (no scp call for setup script)
+        assert not any("_vastly-setup.sh" in c for c in ssh_calls)
+
+    def test_mismatched_repo_url_triggers_setup(self, monkeypatch):
+        """When marker repoUrl differs, setup should re-run."""
+        from vastly.remote import setup_instances
+
+        old_url = "git@github.com:old-org/app.git"
+        new_url = "git@github.com:new-org/app.git"
+        marker_json = json.dumps({"repoUrl": old_url, "timestamp": "2025-01-01"})
+
+        def fake_ssh(name, cmd, **kwargs):
+            if "echo ok" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
+            if "cat ~/.vastly/setup/" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": marker_json, "stderr": ""})()
+            # Setup script execution
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        scp_calls = []
+
+        def fake_scp(*args, **kwargs):
+            scp_calls.append(args)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
+        monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
+        monkeypatch.setattr(
+            "vastly.remote.subprocess.run",
+            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "Test User\n", "stderr": ""})(),
+        )
+
+        instances = [{"name": "1xA100-US"}]
+        config = {
+            "installCommand": None,
+            "disableAutoTmux": False,
+            "workspace": "/workspace",
+            "postInstall": [],
+        }
+
+        result = setup_instances(instances, new_url, "app", config)
+
+        # Setup script should have been SCP'd (re-run triggered)
+        assert len(scp_calls) > 0
+
+    def test_corrupted_marker_triggers_setup(self, monkeypatch):
+        """When marker contains invalid JSON, setup should re-run."""
+        from vastly.remote import setup_instances
+
+        def fake_ssh(name, cmd, **kwargs):
+            if "echo ok" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
+            if "cat ~/.vastly/setup/" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "not valid json{", "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        scp_calls = []
+
+        def fake_scp(*args, **kwargs):
+            scp_calls.append(args)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
+        monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
+        monkeypatch.setattr(
+            "vastly.remote.subprocess.run",
+            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "Test User\n", "stderr": ""})(),
+        )
+
+        instances = [{"name": "1xA100-US"}]
+        config = {
+            "installCommand": None,
+            "disableAutoTmux": False,
+            "workspace": "/workspace",
+            "postInstall": [],
+        }
+
+        result = setup_instances(instances, "git@github.com:user/app.git", "app", config)
+
+        assert len(scp_calls) > 0
 
 
 class TestColorFunctions:
@@ -657,3 +956,44 @@ class TestColorFunctions:
         assert red(42) == 42
         monkeypatch.setattr("vastly._COLOR", True)
         assert "42" in red(42)
+
+
+class TestUpdateCheck:
+    def test_parse_version(self):
+        from vastly.update import _parse_version
+
+        assert _parse_version("0.2.6") == (0, 2, 6)
+        assert _parse_version("1.0.0") == (1, 0, 0)
+        assert _parse_version("1.0.0") > _parse_version("0.9.9")
+        assert _parse_version("0.2.6") < _parse_version("0.2.7")
+        assert _parse_version("0.3.0") > _parse_version("0.2.99")
+
+    def test_cache_prevents_repeated_checks(self, tmp_path, monkeypatch):
+        """When cache file is recent, no network request should be made."""
+        from vastly.update import check_for_update
+
+        cache_file = tmp_path / ".last-update-check"
+        cache_file.write_text(str(time.time()), encoding="utf-8")
+        monkeypatch.setattr("vastly.update._CACHE_FILE", cache_file)
+
+        # If urlopen were called it would fail -- this verifies it's skipped
+        monkeypatch.setattr(
+            "vastly.update.urllib.request.urlopen",
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not be called")),
+        )
+
+        check_for_update()  # Should return silently (cache is fresh)
+
+    def test_network_error_silently_swallowed(self, tmp_path, monkeypatch):
+        """Network failures should not raise or print errors."""
+        from vastly.update import check_for_update
+
+        # No cache file -- will try to fetch
+        monkeypatch.setattr("vastly.update._CACHE_FILE", tmp_path / ".last-update-check")
+        monkeypatch.setattr("vastly.update._CACHE_DIR", tmp_path)
+        monkeypatch.setattr(
+            "vastly.update.urllib.request.urlopen",
+            lambda *a, **kw: (_ for _ in ()).throw(OSError("no internet")),
+        )
+
+        check_for_update()  # Should not raise

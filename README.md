@@ -52,7 +52,7 @@ On first run (no marker), `vastly` reads the remote URL from your local git repo
 
 The setup script ([setup-remote.sh](src/vastly/data/setup-remote.sh)):
 
-- Disables auto-tmux (on by default, configurable)
+- Disables auto-tmux (if configured)
 - Configures git identity from your local `git config`
 - Adds the git host to SSH known hosts (extracted from repo URL)
 - Clones your repo into the workspace
@@ -69,6 +69,11 @@ The setup script ([setup-remote.sh](src/vastly/data/setup-remote.sh)):
 4. `setup.py` -- `pip install -e .`
 
 Override with `installCommand` in your config.
+
+**Authentication** -- to clone private repos, the instance needs to authenticate with your git host (GitHub, GitLab, etc.). How this works depends on your remote URL:
+
+- **SSH remotes** (`git@github.com:...`): Vastly enables SSH agent forwarding automatically. Your local SSH key is forwarded to the instance for the duration of the connection -- it is never copied. Make sure your key is loaded in your SSH agent (`ssh-add -l` to check, `ssh-add` to load).
+- **HTTPS remotes** (`https://github.com/...`): Agent forwarding does not apply. Public repos clone without authentication. Private repos will fail because HTTPS credentials (tokens, Git Credential Manager) cannot be forwarded to remote instances. To fix this, switch to an SSH remote: `git remote set-url origin git@github.com:user/repo.git`.
 
 ### 4. Open
 
@@ -99,7 +104,7 @@ On first run, `vastly` creates `~/.vastly.json` with defaults:
   "workspace": "/workspace",
 
   // Creates ~/.no_auto_tmux to prevent auto-tmux on Vast images
-  "disableAutoTmux": true,
+  "disableAutoTmux": false,
 
   // Which git remote to read the repo URL from
   "gitRemote": "origin",
@@ -110,7 +115,33 @@ On first run, `vastly` creates `~/.vastly.json` with defaults:
 
   // Override auto-detected install method. null = auto-detect
   // e.g. "uv sync", "pip install -e '.[dev]'", "conda env update -f environment.yml"
-  "installCommand": null
+  "installCommand": null,
+
+  // Files/directories to copy from local repo to remote after setup
+  // Paths are relative to the repo root. Directories are copied recursively
+  // e.g. [".claude/", ".env.template"]
+  "copyFiles": []
+}
+```
+
+### Per-project config
+
+You can create a `.vastly.json` in your repo root to set project-specific configuration. Project config overrides the global config for these keys only:
+
+- `postInstall`
+- `installCommand`
+- `workspace`
+- `portForwards`
+- `copyFiles`
+- `gitRemote`
+
+User-specific keys (`ide`, `sshKeyPath`, `sshUser`, `disableAutoTmux`) are always read from the global `~/.vastly.json` and ignored in project configs.
+
+```jsonc
+// .vastly.json (in repo root)
+{
+  "postInstall": ["make setup"],
+  "copyFiles": [".claude/"]
 }
 ```
 
@@ -121,3 +152,5 @@ On first run, `vastly` creates `~/.vastly.json` with defaults:
 **SSH connection timeout** -- Instance may still be booting. Setup retries 3 times. Run `vastai show instances` to check status.
 
 **"Not in a git repo"** -- `vastly` reads the remote URL from your local repo. Run from inside a git repo, or use `--no-setup`.
+
+**"Cannot access repo"** -- For SSH remotes, check that your SSH agent is running and your key is loaded (`ssh-add -l`). For HTTPS remotes with private repos, HTTPS credentials can't be forwarded -- switch to an SSH remote (see Authentication above).

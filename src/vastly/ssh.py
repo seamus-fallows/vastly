@@ -136,11 +136,14 @@ def run_ssh(
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
-def run_scp(src: str, dest: str, *, setup: bool = False) -> subprocess.CompletedProcess:
+def run_scp(
+    src: str, dest: str, *, setup: bool = False, recursive: bool = False
+) -> subprocess.CompletedProcess:
     """SCP a file from *src* to *dest*."""
     opts = SSH_SETUP_OPTS if setup else SSH_OPTS
+    flags = ["-r"] if recursive else []
     return subprocess.run(
-        ["scp", *opts, src, dest],
+        ["scp", *flags, *opts, src, dest],
         capture_output=True,
         text=True,
     )

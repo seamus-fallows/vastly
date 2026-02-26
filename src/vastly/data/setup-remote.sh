@@ -56,14 +56,41 @@ git config --global user.email "$GIT_EMAIL"
 
 # ── Step 3: Git host known keys ───────────────────────────────────────
 
-REPO_HOST=$(echo "$REPO_URL" | sed -n 's/.*@\([^:]*\).*/\1/p')
-if [[ -n "$REPO_HOST" ]] && ! grep -q "^${REPO_HOST} " ~/.ssh/known_hosts 2>/dev/null; then
-    log "Adding ${REPO_HOST} to known_hosts"
-    mkdir -p ~/.ssh
-    ssh-keyscan "$REPO_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+if [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
+    REPO_HOST=$(echo "$REPO_URL" | sed -n 's/.*@\([^:]*\).*/\1/p')
+    if [[ -n "$REPO_HOST" ]] && ! grep -q "^${REPO_HOST} " ~/.ssh/known_hosts 2>/dev/null; then
+        log "Adding ${REPO_HOST} to known_hosts"
+        mkdir -p ~/.ssh
+        ssh-keyscan "$REPO_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+    fi
+else
+    REPO_HOST=$(echo "$REPO_URL" | sed -n 's|https\?://\([^/]*\).*|\1|p')
 fi
 
-# ── Step 4: Clone ──────────────────────────────────────────────────────
+# ── Step 4: Verify repo access ────────────────────────────────────────
+
+log "Verifying access to ${REPO_URL}..."
+if ! git ls-remote "$REPO_URL" HEAD &>/dev/null; then
+    if [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
+        die "Cannot access repo via SSH. Agent forwarding may not be working.
+  Check that:
+    1. You have an SSH key added to ${REPO_HOST}
+    2. Your SSH agent is running locally (test: ssh-add -l)
+    3. Your key is loaded in the agent (load it: ssh-add)
+  Docs: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
+    else
+        die "Cannot access repo via HTTPS. If this is a private repo,
+  HTTPS credentials cannot be securely forwarded to remote instances.
+  To fix this, set up SSH key authentication:
+    1. Generate a key: ssh-keygen -t ed25519
+    2. Add it to ${REPO_HOST}: https://${REPO_HOST}/settings/ssh/new
+    3. Load it into your agent: ssh-add
+    4. Switch your remote: git remote set-url origin git@${REPO_HOST}:<user>/<repo>.git
+  Docs: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
+    fi
+fi
+
+# ── Step 5: Clone ──────────────────────────────────────────────────────
 
 mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
@@ -77,7 +104,7 @@ else
     cd "$REPO_NAME"
 fi
 
-# ── Step 5: Python environment detection ────────────────────────────────
+# ── Step 6: Python environment detection ────────────────────────────────
 
 # Find the best Python interpreter available on this instance.
 setup_python() {
@@ -120,7 +147,7 @@ if [[ -z "$PYTHON_PATH" ]]; then
     warn "No Python interpreter found -- skipping dependency install"
 fi
 
-# ── Step 6: Install dependencies ────────────────────────────────────────
+# ── Step 7: Install dependencies ────────────────────────────────────────
 
 INSTALL_METHOD="none"
 
@@ -159,7 +186,7 @@ else
     log "No Python interpreter available -- skipping dependency install"
 fi
 
-# ── Step 7: Post-install commands ───────────────────────────────────────
+# ── Step 8: Post-install commands ───────────────────────────────────────
 
 if [[ ${#POST_INSTALL_COMMANDS[@]} -gt 0 ]]; then
     for cmd in "${POST_INSTALL_COMMANDS[@]}"; do
@@ -169,7 +196,7 @@ if [[ ${#POST_INSTALL_COMMANDS[@]} -gt 0 ]]; then
     done
 fi
 
-# ── Step 8: IDE settings ───────────────────────────────────────────────
+# ── Step 9: IDE settings ───────────────────────────────────────────────
 
 # For VS Code settings, prefer the venv python, fall back to detected
 VSCODE_PYTHON="$PYTHON_PATH"
@@ -193,7 +220,7 @@ cat > .vscode/settings.json << VSCEOF
 }
 VSCEOF
 
-# ── Step 9: Patch .bashrc ──────────────────────────────────────────────
+# ── Step 10: Patch .bashrc ──────────────────────────────────────────────
 
 log "Patching .bashrc"
 
@@ -223,10 +250,10 @@ fi
     echo "export PATH=\"\$HOME/.local/bin:\$PATH\" ${BASHRC_MARKER}"
     [[ -n "$CONDA_LINE" ]] && echo "$CONDA_LINE"
     [[ -n "$VENV_LINE" ]] && echo "$VENV_LINE"
-    echo "cd ${REPO_DIR} ${BASHRC_MARKER}"
+    echo "cd \"${REPO_DIR}\" ${BASHRC_MARKER}"
 } >> ~/.bashrc
 
-# ── Step 10: Ensure .bash_profile sources .bashrc ───────────────────────
+# ── Step 11: Ensure .bash_profile sources .bashrc ───────────────────────
 
 # Remove old vastly lines from .bash_profile too, then re-add if needed
 touch ~/.bash_profile
@@ -236,7 +263,7 @@ if ! grep -q '\.bashrc' ~/.bash_profile 2>/dev/null; then
     echo "[ -f ~/.bashrc ] && . ~/.bashrc ${BASHRC_MARKER}" >> ~/.bash_profile
 fi
 
-# ── Step 11: Write setup marker ───────────────────────────────────────
+# ── Step 12: Write setup marker ───────────────────────────────────────
 
 MARKER_DIR="$HOME/.vastly/setup"
 TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -244,8 +271,10 @@ TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 log "Writing setup marker to ${MARKER_DIR}/${REPO_NAME}.json"
 mkdir -p "$MARKER_DIR"
 INSTALL_METHOD_ESCAPED="${INSTALL_METHOD//\"/\\\"}"
+REPO_URL_ESCAPED="${REPO_URL//\"/\\\"}"
 cat > "${MARKER_DIR}/${REPO_NAME}.json" << MARKEREOF
 {
+    "repoUrl": "${REPO_URL_ESCAPED}",
     "timestamp": "${TIMESTAMP}",
     "installMethod": "${INSTALL_METHOD_ESCAPED}",
     "moduleVersion": "${MODULE_VERSION}"

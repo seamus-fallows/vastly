@@ -2,23 +2,15 @@
 
 from __future__ import annotations
 
-import re
+import json
 import shlex
 import subprocess
 import time
 from importlib import resources
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from vastly import __version__, cyan, green, red, yellow
 from vastly.ssh import run_scp, run_ssh
-
-
-def convert_to_ssh_url(url: str) -> str:
-    """Convert an HTTPS git URL to SSH format."""
-    m = re.match(r"https://([^/]+)/(.+?)/?$", url)
-    if m:
-        return f"git@{m.group(1)}:{m.group(2)}"
-    return url
 
 
 def setup_instances(
@@ -28,6 +20,8 @@ def setup_instances(
     config: dict,
     *,
     force_setup: bool = False,
+    project_dir: Path | None = None,
+    copy_files: list[str] | None = None,
 ) -> list[str]:
     """Run remote setup on each instance. Returns list of successful host names."""
     git_name = subprocess.run(
@@ -70,13 +64,18 @@ def setup_instances(
             continue
 
         if force_setup:
-            run_ssh(name, f"rm -f ~/.vastly/setup/{repo_name}.json")
+            run_ssh(name, f"rm -f ~/.vastly/setup/{shlex.quote(repo_name)}.json")
 
-        marker = run_ssh(name, f"test -f ~/.vastly/setup/{repo_name}.json && echo done")
-        if marker.stdout.strip() == "done":
-            print(green("already set up."))
-            success_names.append(name)
-            continue
+        marker = run_ssh(name, f"cat ~/.vastly/setup/{shlex.quote(repo_name)}.json 2>/dev/null")
+        if marker.returncode == 0 and marker.stdout.strip():
+            try:
+                marker_data = json.loads(marker.stdout)
+                if marker_data.get("repoUrl") == repo_url:
+                    print(green("already set up."))
+                    success_names.append(name)
+                    continue
+            except (json.JSONDecodeError, KeyError):
+                pass  # Corrupted or old-format marker -- re-run setup
 
         # Setup is needed -- git identity required
         if not git_name or not git_email:
@@ -116,6 +115,31 @@ def setup_instances(
         if result.returncode != 0:
             print(red(f"  {name}: setup failed (exit {result.returncode})"))
             continue
+
+        # Copy non-git-tracked files to the remote instance
+        if copy_files and project_dir:
+            remote_base = f"{config['workspace']}/{repo_name}"
+            for rel_path in copy_files:
+                local_path = project_dir / rel_path
+                if not local_path.exists():
+                    print(yellow(f"  {name}: copyFiles: {rel_path} not found locally, skipping"))
+                    continue
+                remote_dest = f"{name}:{remote_base}/{rel_path}"
+                print(cyan(f"  {name}: copying {rel_path}"))
+                # Ensure parent directory exists on remote (use PurePosixPath
+                # so we get forward slashes even when running on Windows)
+                parent_rel = str(PurePosixPath(rel_path).parent)
+                if parent_rel != ".":
+                    remote_parent = f"{remote_base}/{parent_rel}"
+                    run_ssh(name, f"mkdir -p {shlex.quote(remote_parent)}")
+                cp = run_scp(
+                    str(local_path),
+                    remote_dest,
+                    setup=True,
+                    recursive=local_path.is_dir(),
+                )
+                if cp.returncode != 0:
+                    print(yellow(f"  {name}: failed to copy {rel_path}"))
 
         print(green(f"  {name}: done."))
         success_names.append(name)

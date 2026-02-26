@@ -5,12 +5,29 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+from pathlib import Path
 
 from vastly import __version__, green, red, yellow
 from vastly.config import load_config
 from vastly.ide import check_ide, open_ide
 from vastly.instance import get_synced_instances, select_instance, show_table
-from vastly.remote import convert_to_ssh_url, setup_instances
+from vastly.remote import setup_instances
+
+
+def _git_root() -> Path | None:
+    """Return the root of the current git repo, or None."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+    if result.returncode != 0:
+        return None
+    top = result.stdout.strip()
+    return Path(top) if top else None
 
 
 def _check_prerequisites(*, need_ide: bool = False, ide: str) -> bool:
@@ -27,10 +44,15 @@ def _check_prerequisites(*, need_ide: bool = False, ide: str) -> bool:
         print(red("Missing: ssh."))
         ok = False
     if need_ide and not check_ide(ide):
-        urls = {"code": "https://code.visualstudio.com", "cursor": "https://cursor.com"}
-        url = urls.get(ide, "")
-        hint = f" Download from {url}" if url else ""
-        print(red(f"Missing: {ide}.{hint}"))
+        other = {"code": "cursor", "cursor": "code"}.get(ide)
+        if other and check_ide(other):
+            print(red(f"Missing: {ide}, but {other} is installed."))
+            print(red(f'  Update "ide" in ~/.vastly.json to "{other}" to use it.'))
+        else:
+            urls = {"code": "https://code.visualstudio.com", "cursor": "https://cursor.com"}
+            url = urls.get(ide, "")
+            hint = f" Download from {url}" if url else ""
+            print(red(f"Missing: {ide}.{hint}"))
         ok = False
 
     return ok
@@ -54,7 +76,6 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     repo_url = result.stdout.strip()
     if not repo_url:
         return None
-    repo_url = convert_to_ssh_url(repo_url)
     repo_name = repo_url.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
     return repo_url, repo_name
 
@@ -63,7 +84,8 @@ def _connect(
     name: str | None, *, no_setup: bool, force_setup: bool, list_only: bool
 ) -> None:
     """Main connect flow -- sync instances, check setup, run setup if needed, open IDE."""
-    config = load_config()
+    git_root = _git_root()
+    config = load_config(project_dir=git_root)
 
     if not _check_prerequisites(need_ide=not list_only, ide=config["ide"]):
         return
@@ -99,7 +121,13 @@ def _connect(
     remote_path = f"{config['workspace']}/{repo_name}"
 
     success_names = setup_instances(
-        selected, repo_url, repo_name, config, force_setup=force_setup
+        selected,
+        repo_url,
+        repo_name,
+        config,
+        force_setup=force_setup,
+        project_dir=git_root,
+        copy_files=config["copyFiles"],
     )
     for inst_name in success_names:
         print(green(f"  Opening {remote_path}"))
@@ -142,3 +170,7 @@ def main() -> None:
         force_setup=args.force_setup,
         list_only=args.list,
     )
+
+    from vastly.update import check_for_update
+
+    check_for_update()

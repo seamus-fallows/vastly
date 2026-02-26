@@ -81,7 +81,7 @@ class TestCheckPrerequisites:
 
 
 class TestLocalRepoInfo:
-    def test_returns_ssh_url_and_repo_name(self, monkeypatch):
+    def test_returns_https_url_and_repo_name(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
             lambda *a, **kw: subprocess.CompletedProcess(
@@ -89,7 +89,7 @@ class TestLocalRepoInfo:
             ),
         )
         result = _local_repo_info("origin")
-        assert result == ("git@github.com:user/my-project.git", "my-project")
+        assert result == ("https://github.com/user/my-project.git", "my-project")
 
     def test_returns_none_when_not_in_git_repo(self, monkeypatch):
         monkeypatch.setattr(
