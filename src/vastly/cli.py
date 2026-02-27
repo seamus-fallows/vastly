@@ -13,7 +13,14 @@ from vastly import __version__, green, red, yellow
 from vastly.config import load_config
 from vastly.errors import VastlyError
 from vastly.ide import check_ide, open_ide
-from vastly.instance import get_synced_instances, select_instance, show_table
+from vastly.instance import (
+    get_synced_instances,
+    load_aliases,
+    save_aliases,
+    select_instance,
+    show_table,
+    validate_alias,
+)
 from vastly.remote import setup_instances
 
 
@@ -101,10 +108,11 @@ def _select_single_instance(
     always returns a single instance dict.
     """
     if name:
-        match = [i for i in instances if i["name"] == name]
+        match = [i for i in instances if i["name"] == name or i.get("alias") == name]
         if not match:
-            names = [i["name"] for i in instances]
-            raise VastlyError(f"No instance named '{name}'. Available: {', '.join(names)}")
+            from vastly.instance import _display_name
+            labels = [_display_name(i) for i in instances]
+            raise VastlyError(f"No instance named '{name}'. Available: {', '.join(labels)}")
         return match[0]
 
     if len(instances) == 1:
@@ -197,6 +205,47 @@ def _cmd_list(args) -> None:
     show_table(instances)
 
 
+def _cmd_name(args) -> None:
+    """Assign or remove a custom alias for an instance."""
+    if args.clear:
+        # Remove alias by name
+        aliases = load_aliases()
+        found = False
+        for inst_id, alias in list(aliases.items()):
+            if alias == args.alias:
+                del aliases[inst_id]
+                found = True
+                break
+        if not found:
+            raise VastlyError(f"No alias '{args.alias}' found.")
+        save_aliases(aliases)
+        print(green(f"  Removed alias '{args.alias}'"))
+        return
+
+    git_root = _git_root()
+    config = load_config(project_dir=git_root)
+
+    if not _check_prerequisites(ide=config["ide"]):
+        return
+
+    instances = get_synced_instances(config)
+    aliases = load_aliases()
+
+    validate_alias(args.alias, instances, aliases)
+
+    inst = _select_single_instance(instances, args.instance)
+    inst_id = str(inst["id"])
+
+    # Remove any existing alias for this instance
+    if inst_id in aliases:
+        old_alias = aliases[inst_id]
+        del aliases[inst_id]
+
+    aliases[inst_id] = args.alias
+    save_aliases(aliases)
+    print(green(f"  Named {inst['name']} as '{args.alias}'"))
+
+
 def _cmd_stop(args) -> None:
     """Stop one or more running instances."""
     if args.name and args.all:
@@ -267,7 +316,7 @@ def _vastai_action(action: str, inst: dict) -> None:
 
 
 def _vastai_destroy(inst: dict, config: dict) -> None:
-    """Destroy an instance and clean up its SSH config."""
+    """Destroy an instance and clean up its SSH config and alias."""
     from vastly.ssh import SSH_CONFIG_DIR
 
     _vastai_action("destroy", inst)
@@ -276,6 +325,17 @@ def _vastai_destroy(inst: dict, config: dict) -> None:
     config_file = SSH_CONFIG_DIR / inst["name"]
     if config_file.exists():
         config_file.unlink()
+
+    # Clean up alias SSH config and alias entry
+    inst_id = str(inst.get("id", ""))
+    if inst_id:
+        aliases = load_aliases()
+        alias = aliases.pop(inst_id, None)
+        if alias:
+            save_aliases(aliases)
+            alias_config = SSH_CONFIG_DIR / alias
+            if alias_config.exists():
+                alias_config.unlink()
 
 
 # ── Entry point ──────────────────────────────────────────────────────
@@ -287,7 +347,7 @@ def main() -> None:
         prog="vst",
         description="Connect to Vast.ai instances: sync SSH, set up your project, and open your IDE.",
         epilog=(
-            "commands: connect, list, stop, destroy\n"
+            "commands: connect, list, stop, destroy, name\n"
             "run vst <command> --help for details\n\n"
             "alias:         `vastly` and `vst` are the same command\n"
             "prerequisites: vastai CLI (pip install vastai), git, ssh, VS Code or Cursor\n"
@@ -330,6 +390,15 @@ def main() -> None:
     destroy_parser.add_argument("--all", action="store_true", help="destroy all instances")
     destroy_parser.add_argument("-v", "--verbose", action="store_true")
 
+    # Name
+    name_parser = subparsers.add_parser("name", help="assign a custom name to an instance")
+    name_parser.add_argument("alias", help="custom name to assign")
+    name_parser.add_argument(
+        "-i", "--instance", help="instance to name (default: auto-select or picker)",
+    )
+    name_parser.add_argument("--clear", action="store_true", help="remove the alias")
+    name_parser.add_argument("-v", "--verbose", action="store_true")
+
     args = parser.parse_args()
 
     # No subcommand = connect with auto-select
@@ -352,6 +421,8 @@ def main() -> None:
             _cmd_stop(args)
         elif args.command == "destroy":
             _cmd_destroy(args)
+        elif args.command == "name":
+            _cmd_name(args)
     except KeyboardInterrupt:
         print(file=sys.stderr)  # clean up partial line
         sys.exit(130)  # standard exit code for SIGINT

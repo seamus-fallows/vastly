@@ -17,7 +17,14 @@ import pytest
 from vastly import __version__, cyan, dim, green, red, yellow
 from vastly.config import _detect_ide, _ide_from_env, _validate_config, load_config
 from vastly.errors import ConfigError, VastlyError
-from vastly.instance import build_instance_name, format_uptime, select_instance
+from vastly.instance import (
+    build_instance_name,
+    format_uptime,
+    load_aliases,
+    save_aliases,
+    select_instance,
+    validate_alias,
+)
 from vastly.ssh import (
     cached_config_names,
     clear_ssh_configs,
@@ -1201,3 +1208,72 @@ class TestStopDestroy:
 
         monkeypatch.setattr("builtins.input", lambda _: "")
         assert _confirm("Do it?") is False
+
+
+class TestAliases:
+    def test_save_and_load_aliases(self, tmp_path, monkeypatch):
+        aliases_file = tmp_path / "aliases.json"
+        monkeypatch.setattr("vastly.instance._ALIASES_FILE", aliases_file)
+
+        save_aliases({"123": "train", "456": "dev"})
+        result = load_aliases()
+
+        assert result == {"123": "train", "456": "dev"}
+
+    def test_load_aliases_returns_empty_when_missing(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("vastly.instance._ALIASES_FILE", tmp_path / "nope.json")
+        assert load_aliases() == {}
+
+    def test_load_aliases_returns_empty_on_bad_json(self, tmp_path, monkeypatch):
+        f = tmp_path / "aliases.json"
+        f.write_text("{bad json}", encoding="utf-8")
+        monkeypatch.setattr("vastly.instance._ALIASES_FILE", f)
+        assert load_aliases() == {}
+
+    def test_validate_alias_valid(self):
+        instances = [{"name": "1xRTX4090-TW", "id": 100}]
+        aliases = {}
+        validate_alias("train", instances, aliases)  # should not raise
+
+    def test_validate_alias_rejects_empty(self):
+        with pytest.raises(VastlyError, match="cannot be empty"):
+            validate_alias("", [], {})
+
+    def test_validate_alias_rejects_uppercase(self):
+        with pytest.raises(VastlyError, match="lowercase"):
+            validate_alias("Train", [], {})
+
+    def test_validate_alias_rejects_spaces(self):
+        with pytest.raises(VastlyError, match="lowercase"):
+            validate_alias("my train", [], {})
+
+    def test_validate_alias_rejects_reserved_name(self):
+        with pytest.raises(VastlyError, match="reserved"):
+            validate_alias("connect", [], {})
+
+    def test_validate_alias_rejects_auto_name_collision(self):
+        instances = [{"name": "train", "id": 100}]
+        with pytest.raises(VastlyError, match="conflicts"):
+            validate_alias("train", instances, {})
+
+    def test_validate_alias_rejects_duplicate_alias(self):
+        aliases = {"123": "train"}
+        with pytest.raises(VastlyError, match="already assigned"):
+            validate_alias("train", [], aliases)
+
+    def test_select_instance_matches_alias(self):
+        instances = [
+            {"name": "1xRTX4090-TW", "id": 100, "alias": "train"},
+            {"name": "2xA100-US", "id": 200, "alias": None},
+        ]
+        result = select_instance(instances, "train")
+        assert len(result) == 1
+        assert result[0]["name"] == "1xRTX4090-TW"
+
+    def test_select_instance_matches_auto_name_with_alias(self):
+        instances = [
+            {"name": "1xRTX4090-TW", "id": 100, "alias": "train"},
+        ]
+        result = select_instance(instances, "1xRTX4090-TW")
+        assert len(result) == 1
+        assert result[0]["alias"] == "train"
