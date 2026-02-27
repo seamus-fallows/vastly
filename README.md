@@ -24,12 +24,32 @@ cd your-project      # any local git repo
 vst                  # checks setup -> opens IDE (sets up on first run)
 ```
 
+### Commands
+
 ```sh
-vst 1xRTX4090-TW    # target a specific instance by name
-vst --no-setup       # open IDE without cloning or installing anything
-vst --force-setup    # re-run remote setup even if already done
-vst --list           # list instances and exit
-vst --version        # show version
+vst                          # connect with auto-select (default)
+vst connect [name]           # connect to an instance and open IDE
+vst list                     # list running instances
+vst stop [name]              # stop an instance
+vst destroy [name]           # destroy an instance (irreversible)
+vst cp up|down <path>        # copy files to/from remote
+vst name <alias> [-i inst]   # assign a custom name to an instance
+```
+
+### Examples
+
+```sh
+vst connect 1xRTX4090-TW    # target a specific instance by name
+vst connect --no-setup       # open IDE without cloning or installing
+vst connect --force-setup    # re-run remote setup even if already done
+vst list                     # list instances and exit
+vst stop                     # stop current instance
+vst destroy                  # destroy current instance
+vst cp down results/         # download results directory
+vst cp up .env               # upload a file
+vst name train               # name your instance
+vst connect train            # connect by alias
+vst --version                # show version
 ```
 
 ## How It Works
@@ -42,7 +62,7 @@ Instances are named by GPU and region (e.g. `1xRTX4090-TW`, `2xA100-US`). Duplic
 
 ### 2. Select
 
-One instance is selected automatically. Multiple instances prompt you to pick one or select all. You can also pass the name directly: `vst 1xRTX4090-TW`.
+One instance is selected automatically. Multiple instances prompt you to pick one or select all. You can also pass the name directly: `vst connect 1xRTX4090-TW`. If you've assigned an alias with `vst name`, you can use that too: `vst connect train`.
 
 ### 3. Setup (first run only)
 
@@ -151,6 +171,6 @@ User-specific keys (`ide`, `sshKeyPath`, `sshUser`, `disableAutoTmux`) are alway
 
 **SSH connection timeout** -- Instance may still be booting. Setup retries 3 times. Run `vastai show instances` to check status.
 
-**"Not in a git repo"** -- `vastly` reads the remote URL from your local repo. Run from inside a git repo, or use `--no-setup`.
+**"Not in a git repo"** -- `vastly` reads the remote URL from your local repo. Run from inside a git repo, or use `vst connect --no-setup`.
 
 **"Cannot access repo"** -- For SSH remotes, check that your SSH agent is running and your key is loaded (`ssh-add -l`). For HTTPS remotes with private repos, HTTPS credentials can't be forwarded -- switch to an SSH remote (see Authentication above).
