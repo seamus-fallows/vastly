@@ -7,7 +7,9 @@ import re
 import subprocess
 from datetime import datetime, timezone
 
+import vastly
 from vastly import dim, red, yellow
+from vastly.errors import APIError, VastlyError
 from vastly.ssh import (
     SSH_CONFIG_DIR,
     cached_config_names,
@@ -18,8 +20,11 @@ from vastly.ssh import (
 )
 
 
-def fetch_instances() -> list[dict] | None:
-    """Call vastai CLI and return list of running instances, or None on failure."""
+def fetch_instances() -> list[dict]:
+    """Call vastai CLI and return list of running instances.
+
+    Raises APIError if the API is unreachable or returns invalid data.
+    """
     result = subprocess.run(
         ["vastai", "show", "instances", "--raw"],
         capture_output=True,
@@ -27,21 +32,17 @@ def fetch_instances() -> list[dict] | None:
     )
     if result.returncode != 0:
         if result.stderr.strip():
-            print(red(f"vastai: {result.stderr.strip()}"))
-        else:
-            print(
-                red(
-                    "vastai command failed. Is your API key set? Run: vastai set api-key <key>"
-                )
-            )
-        return None
+            raise APIError(f"vastai: {result.stderr.strip()}")
+        raise APIError(
+            "vastai command failed. Is your API key set? Run: vastai set api-key <key>"
+        )
     try:
         data = json.loads(result.stdout)
-    except (json.JSONDecodeError, TypeError):
-        return None
+    except (json.JSONDecodeError, TypeError) as e:
+        raise APIError("vastai returned invalid data") from e
 
     if not isinstance(data, list):
-        return None
+        raise APIError("vastai returned invalid data")
     return data
 
 
@@ -81,21 +82,21 @@ def format_uptime(unix_ts) -> str:
     return f"{round(seconds / 60)}m"
 
 
-def sync_instances(config: dict) -> list[dict] | None:
+def sync_instances(config: dict) -> list[dict]:
     """Sync running instances from the API to SSH configs.
 
     Returns a list of instance dicts with keys: name, id, dph_total,
     gpu_name, num_gpus, start_date, cached.
 
-    Returns None if the API is unreachable and no cached configs exist.
+    Raises APIError if the API is unreachable and no cached configs exist.
     """
     ensure_ssh_include()
     SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
     print(dim("Syncing instances..."))
-    all_instances = fetch_instances()
-
-    if all_instances is None:
+    try:
+        all_instances = fetch_instances()
+    except APIError:
         cached = cached_config_names()
         if cached:
             print(yellow("API unreachable -- using cached configs."))
@@ -111,7 +112,7 @@ def sync_instances(config: dict) -> list[dict] | None:
                 }
                 for n in cached
             ]
-        return None
+        raise
 
     running = [i for i in all_instances if i.get("cur_state") == "running"]
 
@@ -163,15 +164,15 @@ def sync_instances(config: dict) -> list[dict] | None:
     return results
 
 
-def get_synced_instances(config: dict) -> list[dict] | None:
-    """Sync and return instances, printing messages for empty/error cases."""
+def get_synced_instances(config: dict) -> list[dict]:
+    """Sync and return instances.
+
+    Raises VastlyError if no running instances exist.
+    Raises APIError if the API is unreachable and no cached configs exist.
+    """
     result = sync_instances(config)
-    if result is None:
-        print(red("No running instances found and API unreachable."))
-        return None
     if not result:
-        print(yellow("No running Vast instances."))
-        return None
+        raise VastlyError("No running Vast instances.")
     return result
 
 
@@ -194,8 +195,7 @@ def select_instance(instances: list[dict], name: str | None = None) -> list[dict
     if name:
         match = [i for i in instances if i["name"] == name]
         if not match:
-            print(red(f"No instance named '{name}'. Available: {', '.join(names)}"))
-            return []
+            raise VastlyError(f"No instance named '{name}'. Available: {', '.join(names)}")
         return match
 
     if len(instances) == 1:

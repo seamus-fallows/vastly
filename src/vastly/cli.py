@@ -5,10 +5,13 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
+import vastly
 from vastly import __version__, green, red, yellow
 from vastly.config import load_config
+from vastly.errors import VastlyError
 from vastly.ide import check_ide, open_ide
 from vastly.instance import get_synced_instances, select_instance, show_table
 from vastly.remote import setup_instances
@@ -71,7 +74,7 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     if result.returncode != 0:
         stderr = result.stderr.strip()
         if stderr and "not a git repository" not in stderr.lower():
-            print(red(f"git: {stderr}"))
+            print(red(f"git: {stderr}"), file=sys.stderr)
         return None
     repo_url = result.stdout.strip()
     if not repo_url:
@@ -80,33 +83,28 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     return repo_url, repo_name
 
 
-def _connect(
-    name: str | None, *, no_setup: bool, force_setup: bool, list_only: bool
-) -> None:
-    """Main connect flow -- sync instances, check setup, run setup if needed, open IDE."""
+# ── Subcommand handlers ──────────────────────────────────────────────
+
+
+def _cmd_connect(args) -> None:
+    """Connect flow -- sync instances, check setup, run setup if needed, open IDE."""
     git_root = _git_root()
     config = load_config(project_dir=git_root)
 
-    if not _check_prerequisites(need_ide=not list_only, ide=config["ide"]):
+    if not _check_prerequisites(need_ide=True, ide=config["ide"]):
         return
 
     instances = get_synced_instances(config)
-    if not instances:
-        return
-
     show_table(instances)
 
-    if list_only:
-        return
-
-    selected = select_instance(instances, name)
+    selected = select_instance(instances, args.name)
     if not selected:
         return
 
     repo_info = _local_repo_info(config["gitRemote"])
 
-    if no_setup or not repo_info:
-        if not repo_info and not no_setup:
+    if args.no_setup or not repo_info:
+        if not repo_info and not args.no_setup:
             print(
                 yellow(
                     "  Not in a git repo. Tip: run vst from inside a git repo to auto-setup."
@@ -125,7 +123,7 @@ def _connect(
         repo_url,
         repo_name,
         config,
-        force_setup=force_setup,
+        force_setup=args.force_setup,
         project_dir=git_root,
         copy_files=config["copyFiles"],
     )
@@ -133,13 +131,35 @@ def _connect(
         print(green(f"  Opening {remote_path}"))
         open_ide(config["ide"], inst_name, remote_path)
 
+    # Only check for updates after successful connect
+    from vastly.update import check_for_update
+
+    check_for_update()
+
+
+def _cmd_list(args) -> None:
+    """List running instances."""
+    git_root = _git_root()
+    config = load_config(project_dir=git_root)
+
+    if not _check_prerequisites(ide=config["ide"]):
+        return
+
+    instances = get_synced_instances(config)
+    show_table(instances)
+
+
+# ── Entry point ──────────────────────────────────────────────────────
+
 
 def main() -> None:
-    """Parse arguments and run the connect flow."""
+    """Parse arguments and dispatch to the appropriate subcommand."""
     parser = argparse.ArgumentParser(
         prog="vst",
-        description="Connect to a Vast.ai instance: sync SSH, set up your project, and open your IDE.",
+        description="Connect to Vast.ai instances: sync SSH, set up your project, and open your IDE.",
         epilog=(
+            "commands: connect, list\n"
+            "run vst <command> --help for details\n\n"
             "alias:         `vastly` and `vst` are the same command\n"
             "prerequisites: vastai CLI (pip install vastai), git, ssh, VS Code or Cursor\n"
             "config:        ~/.vastly.json (created on first run)\n"
@@ -147,30 +167,49 @@ def main() -> None:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("name", nargs="?", help="instance name (from --list output)")
-    parser.add_argument("--list", action="store_true", help="list instances and exit")
-    parser.add_argument(
-        "--version", action="version", version=f"vastly {__version__}"
-    )
+    parser.add_argument("--version", action="version", version=f"vastly {__version__}")
 
-    setup_group = parser.add_mutually_exclusive_group()
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Connect (default when no subcommand given)
+    connect_parser = subparsers.add_parser("connect", help="connect to an instance and open IDE")
+    connect_parser.add_argument("name", nargs="?", help="instance name")
+    connect_parser.add_argument("-v", "--verbose", action="store_true")
+    setup_group = connect_parser.add_mutually_exclusive_group()
     setup_group.add_argument(
-        "-n", "--no-setup", action="store_true", help="open IDE without cloning or installing"
+        "-n", "--no-setup", action="store_true",
+        help="open IDE without cloning or installing",
     )
     setup_group.add_argument(
-        "-f", "--force-setup",
-        action="store_true",
+        "-f", "--force-setup", action="store_true",
         help="re-run remote setup even if already done",
     )
 
+    # List
+    list_parser = subparsers.add_parser("list", help="list running instances")
+    list_parser.add_argument("-v", "--verbose", action="store_true")
+
     args = parser.parse_args()
-    _connect(
-        args.name,
-        no_setup=args.no_setup,
-        force_setup=args.force_setup,
-        list_only=args.list,
-    )
 
-    from vastly.update import check_for_update
+    # No subcommand = connect with auto-select
+    if args.command is None:
+        args.command = "connect"
+        args.name = None
+        args.no_setup = False
+        args.force_setup = False
+        args.verbose = False
 
-    check_for_update()
+    if hasattr(args, "verbose") and args.verbose:
+        vastly.VERBOSE = True
+
+    try:
+        if args.command == "connect":
+            _cmd_connect(args)
+        elif args.command == "list":
+            _cmd_list(args)
+    except KeyboardInterrupt:
+        print(file=sys.stderr)  # clean up partial line
+        sys.exit(130)  # standard exit code for SIGINT
+    except VastlyError as e:
+        print(red(str(e)), file=sys.stderr)
+        sys.exit(e.exit_code)

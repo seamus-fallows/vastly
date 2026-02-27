@@ -2,6 +2,8 @@ import sys
 
 __version__ = "0.3.1"
 
+VERBOSE = False
+
 _COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
 
 

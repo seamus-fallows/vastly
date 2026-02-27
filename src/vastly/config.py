@@ -5,11 +5,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import sys
 from importlib import resources
 from pathlib import Path
 
-from vastly import red
+from vastly.errors import ConfigError
 
 CONFIG_PATH = Path.home() / ".vastly.json"
 
@@ -99,9 +98,10 @@ def load_config(
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
-        print(red(f"Invalid JSON in {path}: {e}"))
-        print("Fix the file or delete it to regenerate from template.")
-        sys.exit(1)
+        raise ConfigError(
+            f"Invalid JSON in {path}: {e}\n"
+            "Fix the file or delete it to regenerate from template."
+        ) from e
 
     config = {}
     for k, v in DEFAULTS.items():
@@ -128,9 +128,10 @@ def load_config(
             try:
                 project_raw = json.loads(project_cfg.read_text(encoding="utf-8"))
             except json.JSONDecodeError as e:
-                print(red(f"Invalid JSON in {project_cfg}: {e}"))
-                print("Fix the project config or remove it.")
-                sys.exit(1)
+                raise ConfigError(
+                    f"Invalid JSON in {project_cfg}: {e}\n"
+                    "Fix the project config or remove it."
+                ) from e
 
             for k, v in project_raw.items():
                 if k not in _PROJECT_KEYS:

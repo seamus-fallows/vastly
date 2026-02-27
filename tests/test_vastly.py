@@ -16,6 +16,7 @@ import pytest
 
 from vastly import __version__, cyan, dim, green, red, yellow
 from vastly.config import _detect_ide, _ide_from_env, load_config
+from vastly.errors import ConfigError, VastlyError
 from vastly.instance import build_instance_name, format_uptime, select_instance
 from vastly.ssh import (
     cached_config_names,
@@ -233,11 +234,11 @@ class TestLoadConfig:
         assert result["ide"] == "code"
         assert result["workspace"] == "/workspace"
 
-    def test_exits_on_invalid_json(self, tmp_path):
+    def test_raises_on_invalid_json(self, tmp_path):
         cfg = tmp_path / ".vastly.json"
         cfg.write_text("{invalid json}", encoding="utf-8")
 
-        with pytest.raises(SystemExit):
+        with pytest.raises(ConfigError):
             load_config(cfg)
 
     def test_null_values_fall_back_to_defaults(self, tmp_path):
@@ -383,13 +384,13 @@ class TestSelectInstance:
         assert len(result) == 1
         assert result[0]["name"] == "2xA100-US"
 
-    def test_returns_empty_for_bad_name(self):
+    def test_raises_for_bad_name(self):
         instances = [
             {"name": "1xRTX3060-TW", "id": 100},
             {"name": "2xA100-US", "id": 200},
         ]
-        result = select_instance(instances, "NOPE")
-        assert result == []
+        with pytest.raises(VastlyError, match="No instance named 'NOPE'"):
+            select_instance(instances, "NOPE")
 
     def test_auto_selects_single_instance(self):
         instances = [{"name": "1xRTX3060-TW", "id": 100}]
