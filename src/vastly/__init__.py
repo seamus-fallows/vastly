@@ -25,3 +25,9 @@ def cyan(s):
 
 def dim(s):
     return f"\033[90m{s}\033[0m" if _COLOR else s
+
+
+def verbose(s):
+    """Print a message only when verbose mode is enabled."""
+    if VERBOSE:
+        print(dim(s), file=sys.stderr)

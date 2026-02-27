@@ -115,6 +115,7 @@ def sync_instances(config: dict) -> list[dict]:
         raise
 
     running = [i for i in all_instances if i.get("cur_state") == "running"]
+    vastly.verbose(f"API returned {len(all_instances)} instances, {len(running)} running")
 
     clear_ssh_configs()
 

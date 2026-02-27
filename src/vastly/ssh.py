@@ -7,6 +7,7 @@ import socket
 import subprocess
 from pathlib import Path
 
+import vastly
 from vastly import dim
 
 SSH_CONFIG_DIR = Path.home() / ".ssh" / "vast.d"
@@ -140,8 +141,12 @@ def run_ssh(
         setup: Use longer timeout options (for setup scripts).
         stream: Print output in real time instead of capturing.
     """
-    opts = SSH_SETUP_OPTS if setup else SSH_OPTS
+    opts = list(SSH_SETUP_OPTS if setup else SSH_OPTS)
+    if vastly.VERBOSE:
+        opts.extend(["-o", "LogLevel=DEBUG"])
     cmd = ["ssh", *opts, host, command]
+
+    vastly.verbose(f"ssh {host}: {command[:80]}")
 
     # Hard timeout: SSH options cover TCP connect and keepalives, but not
     # handshake stalls.  Probe commands get 30s; setup scripts get 10min.
@@ -159,9 +164,14 @@ def run_scp(
     src: str, dest: str, *, setup: bool = False, recursive: bool = False
 ) -> subprocess.CompletedProcess:
     """SCP a file from *src* to *dest*."""
-    opts = SSH_SETUP_OPTS if setup else SSH_OPTS
+    opts = list(SSH_SETUP_OPTS if setup else SSH_OPTS)
+    if vastly.VERBOSE:
+        opts.extend(["-o", "LogLevel=DEBUG"])
     flags = ["-r"] if recursive else []
     deadline = 600 if setup else 60
+
+    vastly.verbose(f"scp {src} -> {dest}")
+
     try:
         return subprocess.run(
             ["scp", *flags, *opts, src, dest],
