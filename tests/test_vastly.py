@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from vastly import __version__, cyan, dim, green, red, yellow
-from vastly.config import _detect_ide, _ide_from_env, load_config
+from vastly.config import _detect_ide, _ide_from_env, _validate_config, load_config
 from vastly.errors import ConfigError, VastlyError
 from vastly.instance import build_instance_name, format_uptime, select_instance
 from vastly.ssh import (
@@ -345,6 +345,79 @@ class TestLoadConfig:
         monkeypatch.delenv("TERM_PROGRAM", raising=False)
         result = load_config(cfg)
         assert result["ide"] == "cursor"
+
+
+class TestConfigValidation:
+    """Tests for _validate_config and related validation behavior."""
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch):
+        """Prevent the host IDE terminal from affecting config tests."""
+        for var in TestIdeFromEnv._ENV_VARS:
+            monkeypatch.delenv(var, raising=False)
+
+    def test_valid_config_passes(self):
+        """A well-formed config dict should not raise."""
+        config = {
+            "ide": "code",
+            "sshUser": "root",
+            "sshKeyPath": None,
+            "workspace": "/workspace",
+            "disableAutoTmux": False,
+            "gitRemote": "origin",
+            "portForwards": [{"local": 8080, "remote": 8080}],
+            "postInstall": [],
+            "installCommand": None,
+            "copyFiles": [],
+        }
+        _validate_config(config)  # should not raise
+
+    def test_wrong_type_for_port_forwards_raises(self, tmp_path):
+        """portForwards set to an int should raise ConfigError."""
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"portForwards": 8080}', encoding="utf-8")
+        with pytest.raises(ConfigError, match="portForwards"):
+            load_config(cfg)
+
+    def test_wrong_type_for_disable_auto_tmux_raises(self, tmp_path):
+        """disableAutoTmux set to a string should raise ConfigError."""
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"disableAutoTmux": "yes"}', encoding="utf-8")
+        with pytest.raises(ConfigError, match="disableAutoTmux"):
+            load_config(cfg)
+
+    def test_workspace_without_leading_slash_raises(self, tmp_path):
+        """workspace that doesn't start with / should raise ConfigError."""
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"workspace": "relative/path"}', encoding="utf-8")
+        with pytest.raises(ConfigError, match="workspace.*must start with"):
+            load_config(cfg)
+
+    def test_unrecognized_keys_warn_to_stderr(self, tmp_path, capsys):
+        """Unrecognized top-level keys should produce a warning on stderr."""
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text(
+            '{"bogusKey": 123, "anotherBad": true}', encoding="utf-8"
+        )
+        load_config(cfg)
+        captured = capsys.readouterr()
+        assert "unrecognized config keys" in captured.err
+        assert "anotherBad" in captured.err
+        assert "bogusKey" in captured.err
+
+    def test_port_forwards_entry_not_dict_raises(self, tmp_path):
+        """portForwards containing a non-dict entry should raise ConfigError."""
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"portForwards": [8080]}', encoding="utf-8")
+        with pytest.raises(ConfigError, match="portForwards"):
+            load_config(cfg)
+
+    def test_port_forwards_missing_key_raises(self, tmp_path):
+        """portForwards entry missing 'remote' should raise ConfigError."""
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"portForwards": [{"local": 8080}]}', encoding="utf-8")
+        with pytest.raises(ConfigError, match="portForwards.*remote"):
+            load_config(cfg)
 
 
 class TestPortHelpers:

@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from importlib import resources
 from pathlib import Path
 
+import vastly
 from vastly.errors import ConfigError
 
 CONFIG_PATH = Path.home() / ".vastly.json"
@@ -72,6 +74,112 @@ def _detect_ide() -> str:
     return "code"
 
 
+_KNOWN_KEYS = set(DEFAULTS)
+
+
+def _validate_config(config: dict) -> None:
+    """Validate types and basic shapes of a resolved config dict.
+
+    Raises ConfigError with a clear message on the first problem found.
+    """
+    # --- non-empty string keys ---
+    for key in ("ide", "sshUser", "workspace", "gitRemote"):
+        val = config.get(key)
+        if not isinstance(val, str) or not val:
+            raise ConfigError(
+                f"Invalid config: '{key}' must be a non-empty string, "
+                f"got {type(val).__name__}"
+            )
+
+    # workspace must start with /
+    if not config["workspace"].startswith("/"):
+        raise ConfigError(
+            f"Invalid config: 'workspace' must start with '/', "
+            f"got {config['workspace']!r}"
+        )
+
+    # sshKeyPath: None or non-empty string
+    skp = config.get("sshKeyPath")
+    if skp is not None and (not isinstance(skp, str) or not skp):
+        raise ConfigError(
+            f"Invalid config: 'sshKeyPath' must be None or a non-empty string, "
+            f"got {type(skp).__name__}"
+        )
+
+    # disableAutoTmux: bool
+    dat = config.get("disableAutoTmux")
+    if not isinstance(dat, bool):
+        raise ConfigError(
+            f"Invalid config: 'disableAutoTmux' must be a bool, "
+            f"got {type(dat).__name__}"
+        )
+
+    # installCommand: None or non-empty string
+    ic = config.get("installCommand")
+    if ic is not None and (not isinstance(ic, str) or not ic):
+        raise ConfigError(
+            f"Invalid config: 'installCommand' must be None or a non-empty string, "
+            f"got {type(ic).__name__}"
+        )
+
+    # portForwards: list of dicts with int local and int remote
+    pf = config.get("portForwards")
+    if not isinstance(pf, list):
+        raise ConfigError(
+            f"Invalid config: 'portForwards' must be a list of {{local, remote}} objects, "
+            f"got {type(pf).__name__}"
+        )
+    for i, entry in enumerate(pf):
+        if not isinstance(entry, dict):
+            raise ConfigError(
+                f"Invalid config: 'portForwards[{i}]' must be a {{local, remote}} object, "
+                f"got {type(entry).__name__}"
+            )
+        for field in ("local", "remote"):
+            if field not in entry or not isinstance(entry[field], int):
+                actual = type(entry.get(field)).__name__ if field in entry else "missing"
+                raise ConfigError(
+                    f"Invalid config: 'portForwards[{i}].{field}' must be an int, "
+                    f"got {actual}"
+                )
+
+    # postInstall: list of strings
+    pi = config.get("postInstall")
+    if not isinstance(pi, list):
+        raise ConfigError(
+            f"Invalid config: 'postInstall' must be a list of strings, "
+            f"got {type(pi).__name__}"
+        )
+    for i, entry in enumerate(pi):
+        if not isinstance(entry, str):
+            raise ConfigError(
+                f"Invalid config: 'postInstall[{i}]' must be a string, "
+                f"got {type(entry).__name__}"
+            )
+
+    # copyFiles: list of strings
+    cf = config.get("copyFiles")
+    if not isinstance(cf, list):
+        raise ConfigError(
+            f"Invalid config: 'copyFiles' must be a list of strings, "
+            f"got {type(cf).__name__}"
+        )
+    for i, entry in enumerate(cf):
+        if not isinstance(entry, str):
+            raise ConfigError(
+                f"Invalid config: 'copyFiles[{i}]' must be a string, "
+                f"got {type(entry).__name__}"
+            )
+
+
+def _warn_unknown_keys(raw: dict, source: str) -> None:
+    """Print a warning to stderr for any unrecognized top-level keys."""
+    unknown = set(raw) - _KNOWN_KEYS
+    if unknown:
+        keys = ", ".join(sorted(unknown))
+        print(f"Warning: unrecognized config keys in {source}: {keys}", file=sys.stderr)
+
+
 def load_config(
     path: Path | None = None, *, project_dir: Path | None = None
 ) -> dict:
@@ -102,6 +210,8 @@ def load_config(
             f"Invalid JSON in {path}: {e}\n"
             "Fix the file or delete it to regenerate from template."
         ) from e
+
+    _warn_unknown_keys(raw, str(path))
 
     config = {}
     for k, v in DEFAULTS.items():
@@ -143,4 +253,6 @@ def load_config(
             if isinstance(config["postInstall"], str):
                 config["postInstall"] = [config["postInstall"]]
 
+    _validate_config(config)
+    vastly.verbose(f"Config loaded from {path}")
     return config
