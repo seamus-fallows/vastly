@@ -934,28 +934,27 @@ class TestSetupRemoteScript:
 
 
 class TestSetupMarker:
-    """Test that setup markers store and compare repoUrl correctly."""
+    """Test setup marker detection and repo mismatch warning."""
 
     def test_marker_json_includes_repo_url(self):
         """The setup-remote.sh script should write repoUrl into the marker."""
         content = (DATA / "setup-remote.sh").read_text(encoding="utf-8")
         assert '"repoUrl"' in content
 
-    def test_matching_repo_url_skips_setup(self, monkeypatch):
-        """When marker contains the same repoUrl, setup should be skipped."""
+    def test_marker_exists_skips_setup(self, monkeypatch):
+        """When a valid marker exists for the repo, setup should be skipped."""
         from vastly.remote import setup_instances
 
         repo_url = "git@github.com:user/app.git"
         marker_json = json.dumps({"repoUrl": repo_url, "timestamp": "2025-01-01"})
+        probe_output = f"{marker_json}\n__VASTLY_SEP__\napp.json\n"
 
         ssh_calls = []
 
         def fake_ssh(name, cmd, **kwargs):
             ssh_calls.append(cmd)
-            if "echo ok" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
             if "cat ~/.vastly/setup/" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": marker_json, "stderr": ""})()
+                return type("R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
@@ -972,37 +971,27 @@ class TestSetupMarker:
         result = setup_instances(instances, repo_url, "app", config)
 
         assert result == ["1xA100-US"]
-        # Should NOT have run the setup script (no scp call for setup script)
         assert not any("_vastly-setup.sh" in c for c in ssh_calls)
 
-    def test_mismatched_repo_url_triggers_setup(self, monkeypatch):
-        """When marker repoUrl differs, setup should re-run."""
+    def test_marker_with_different_url_still_skips_setup(self, monkeypatch):
+        """When marker exists but repoUrl differs, setup should still be skipped."""
         from vastly.remote import setup_instances
 
         old_url = "git@github.com:old-org/app.git"
         new_url = "git@github.com:new-org/app.git"
         marker_json = json.dumps({"repoUrl": old_url, "timestamp": "2025-01-01"})
+        probe_output = f"{marker_json}\n__VASTLY_SEP__\napp.json\n"
+
+        ssh_calls = []
 
         def fake_ssh(name, cmd, **kwargs):
-            if "echo ok" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
+            ssh_calls.append(cmd)
             if "cat ~/.vastly/setup/" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": marker_json, "stderr": ""})()
-            # Setup script execution
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-        scp_calls = []
-
-        def fake_scp(*args, **kwargs):
-            scp_calls.append(args)
+                return type("R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
-        monkeypatch.setattr(
-            "vastly.remote.subprocess.run",
-            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "Test User\n", "stderr": ""})(),
-        )
+        monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
 
         instances = [{"name": "1xA100-US"}]
         config = {
@@ -1014,18 +1003,19 @@ class TestSetupMarker:
 
         result = setup_instances(instances, new_url, "app", config)
 
-        # Setup script should have been SCP'd (re-run triggered)
-        assert len(scp_calls) > 0
+        # Marker exists -- setup should be skipped regardless of URL
+        assert result == ["1xA100-US"]
+        assert not any("_vastly-setup.sh" in c for c in ssh_calls)
 
     def test_corrupted_marker_triggers_setup(self, monkeypatch):
         """When marker contains invalid JSON, setup should re-run."""
         from vastly.remote import setup_instances
 
+        probe_output = "not valid json{\n__VASTLY_SEP__\napp.json\n"
+
         def fake_ssh(name, cmd, **kwargs):
-            if "echo ok" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": "ok\n", "stderr": ""})()
             if "cat ~/.vastly/setup/" in cmd:
-                return type("R", (), {"returncode": 0, "stdout": "not valid json{", "stderr": ""})()
+                return type("R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         scp_calls = []
@@ -1052,6 +1042,187 @@ class TestSetupMarker:
         result = setup_instances(instances, "git@github.com:user/app.git", "app", config)
 
         assert len(scp_calls) > 0
+
+
+class TestRepoMismatchWarning:
+    """Test the repo mismatch detection and warning prompt."""
+
+    def test_check_repo_mismatch_detects_other_repos(self):
+        from vastly.remote import _check_repo_mismatch
+
+        result = _check_repo_mismatch("app", ["training-pipeline.json"])
+        assert result == ["training-pipeline"]
+
+    def test_check_repo_mismatch_no_mismatch_when_current_repo_present(self):
+        from vastly.remote import _check_repo_mismatch
+
+        result = _check_repo_mismatch("app", ["app.json"])
+        assert result == []
+
+    def test_check_repo_mismatch_no_mismatch_on_empty_listing(self):
+        from vastly.remote import _check_repo_mismatch
+
+        result = _check_repo_mismatch("app", [])
+        assert result == []
+
+    def test_check_repo_mismatch_filters_non_json_files(self):
+        from vastly.remote import _check_repo_mismatch
+
+        result = _check_repo_mismatch("app", ["readme.txt", "other.json"])
+        assert result == ["other"]
+
+    def test_check_repo_mismatch_multiple_other_repos(self):
+        from vastly.remote import _check_repo_mismatch
+
+        result = _check_repo_mismatch("app", ["train.json", "eval.json", "app.json"])
+        assert result == ["train", "eval"]
+
+    def test_mismatch_warning_user_declines(self, monkeypatch):
+        """When other repos exist and user says no, instance should be skipped."""
+        from vastly.remote import setup_instances
+
+        # No marker for current repo, but another repo is set up
+        probe_output = "\n__VASTLY_SEP__\ntraining-pipeline.json\n"
+
+        def fake_ssh(name, cmd, **kwargs):
+            if "cat ~/.vastly/setup/" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
+        monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+
+        instances = [{"name": "1xA100-US"}]
+        config = {
+            "installCommand": None,
+            "disableAutoTmux": False,
+            "workspace": "/workspace",
+            "postInstall": [],
+        }
+
+        result = setup_instances(
+            instances, "git@github.com:user/data-prep.git", "data-prep", config
+        )
+
+        assert result == []
+
+    def test_mismatch_warning_user_confirms(self, monkeypatch):
+        """When other repos exist and user says yes, setup should proceed."""
+        from vastly.remote import setup_instances
+
+        probe_output = "\n__VASTLY_SEP__\ntraining-pipeline.json\n"
+
+        def fake_ssh(name, cmd, **kwargs):
+            if "cat ~/.vastly/setup/" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        scp_calls = []
+
+        def fake_scp(*args, **kwargs):
+            scp_calls.append(args)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
+        monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+        monkeypatch.setattr(
+            "vastly.remote.subprocess.run",
+            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "Test User\n", "stderr": ""})(),
+        )
+
+        instances = [{"name": "1xA100-US"}]
+        config = {
+            "installCommand": None,
+            "disableAutoTmux": False,
+            "workspace": "/workspace",
+            "postInstall": [],
+        }
+
+        result = setup_instances(
+            instances, "git@github.com:user/data-prep.git", "data-prep", config
+        )
+
+        # Setup should have proceeded (SCP'd the setup script)
+        assert len(scp_calls) > 0
+
+    def test_no_mismatch_warning_on_fresh_instance(self, monkeypatch):
+        """When no markers exist at all, setup should proceed without prompting."""
+        from vastly.remote import setup_instances
+
+        # Empty marker, empty listing
+        probe_output = "\n__VASTLY_SEP__\n"
+
+        def fake_ssh(name, cmd, **kwargs):
+            if "cat ~/.vastly/setup/" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        scp_calls = []
+
+        def fake_scp(*args, **kwargs):
+            scp_calls.append(args)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
+        monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
+        # input should NOT be called -- if it is, this will fail
+        monkeypatch.setattr(
+            "builtins.input",
+            lambda _: (_ for _ in ()).throw(AssertionError("should not prompt")),
+        )
+        monkeypatch.setattr(
+            "vastly.remote.subprocess.run",
+            lambda *a, **kw: type("R", (), {"returncode": 0, "stdout": "Test User\n", "stderr": ""})(),
+        )
+
+        instances = [{"name": "1xA100-US"}]
+        config = {
+            "installCommand": None,
+            "disableAutoTmux": False,
+            "workspace": "/workspace",
+            "postInstall": [],
+        }
+
+        result = setup_instances(
+            instances, "git@github.com:user/app.git", "app", config
+        )
+
+        # Setup should proceed without prompting
+        assert len(scp_calls) > 0
+
+    def test_mismatch_warning_eof_skips(self, monkeypatch):
+        """When input raises EOFError (piped/non-interactive), instance is skipped."""
+        from vastly.remote import setup_instances
+
+        probe_output = "\n__VASTLY_SEP__\nother-repo.json\n"
+
+        def fake_ssh(name, cmd, **kwargs):
+            if "cat ~/.vastly/setup/" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        def raise_eof(_):
+            raise EOFError
+
+        monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
+        monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
+        monkeypatch.setattr("builtins.input", raise_eof)
+
+        instances = [{"name": "1xA100-US"}]
+        config = {
+            "installCommand": None,
+            "disableAutoTmux": False,
+            "workspace": "/workspace",
+            "postInstall": [],
+        }
+
+        result = setup_instances(
+            instances, "git@github.com:user/app.git", "app", config
+        )
+
+        assert result == []
 
 
 class TestColorFunctions:

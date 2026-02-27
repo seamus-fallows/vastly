@@ -13,6 +13,18 @@ from vastly import __version__, cyan, green, red, yellow
 from vastly.ssh import run_scp, run_ssh
 
 
+def _check_repo_mismatch(repo_name: str, setup_files: list[str]) -> list[str]:
+    """Return names of other repos set up on the instance.
+
+    Returns an empty list when no mismatch is detected (safe to proceed).
+    """
+    return [
+        f.removesuffix(".json")
+        for f in setup_files
+        if f.endswith(".json") and f.removesuffix(".json") != repo_name
+    ]
+
+
 def setup_instances(
     instances: list[dict],
     repo_url: str,
@@ -45,20 +57,29 @@ def setup_instances(
     success_names = []
 
     q_repo = shlex.quote(repo_name)
+    sep = "__VASTLY_SEP__"
 
     for inst in instances:
         name = inst["name"]
         print(f"  {name}: ", end="", flush=True)
 
-        # Combined reachability + marker check in a single SSH connection.
-        # "|| true" ensures exit 0 whenever SSH connects (even if file is missing).
-        # If force_setup, delete the marker so the cat returns empty.
-        marker_cmd = f"cat ~/.vastly/setup/{q_repo}.json 2>/dev/null || true"
+        # Combined reachability + marker + listing probe in a single SSH connection.
+        # Reads the current repo's marker and lists all markers for mismatch detection.
+        # "|| true" ensures exit 0 whenever SSH connects (even if file/dir is missing).
         if force_setup:
-            marker_cmd = f"rm -f ~/.vastly/setup/{q_repo}.json"
+            marker_cmd = (
+                f"rm -f ~/.vastly/setup/{q_repo}.json; "
+                f"printf '\\n{sep}\\n'; "
+                f"ls ~/.vastly/setup/ 2>/dev/null || true"
+            )
+        else:
+            marker_cmd = (
+                f"cat ~/.vastly/setup/{q_repo}.json 2>/dev/null || true; "
+                f"printf '\\n{sep}\\n'; "
+                f"ls ~/.vastly/setup/ 2>/dev/null || true"
+            )
 
         reachable = False
-        marker_data = None
         for attempt in range(1, 4):
             marker = run_ssh(name, marker_cmd)
             if marker.returncode == 0:
@@ -72,15 +93,42 @@ def setup_instances(
             print(red("unreachable after 3 attempts."))
             continue
 
-        # Check if marker indicates setup is already done
-        if not force_setup and marker.stdout.strip():
+        # Parse probe output: marker JSON (before separator) and setup listing (after)
+        parts = marker.stdout.split(sep)
+        marker_json = parts[0].strip()
+        listing_str = parts[1].strip() if len(parts) > 1 else ""
+        setup_files = listing_str.split("\n") if listing_str else []
+
+        # Marker exists and is valid JSON -- repo is already set up
+        if not force_setup and marker_json:
             try:
-                marker_data = json.loads(marker.stdout)
-            except (json.JSONDecodeError, KeyError):
-                pass  # Corrupted or old-format marker -- re-run setup
-            if marker_data and marker_data.get("repoUrl") == repo_url:
+                marker_data = json.loads(marker_json)
+            except json.JSONDecodeError:
+                marker_data = None
+            if marker_data:
                 print(green("already set up."))
                 success_names.append(name)
+                continue
+
+        # Setup is needed -- check for repo mismatch (other repos on this instance)
+        other_repos = _check_repo_mismatch(repo_name, setup_files)
+        if other_repos:
+            names_str = ", ".join(f"'{r}'" for r in other_repos)
+            print()
+            print(
+                yellow(
+                    f"  Warning: this instance has {names_str} set up, "
+                    f"but you're in '{repo_name}'."
+                )
+            )
+            try:
+                answer = input(
+                    f"  Continue with setup for '{repo_name}'? [y/N] "
+                ).strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = ""
+            if answer != "y":
+                print(f"  {name}: skipped.")
                 continue
 
         # Setup is needed -- git identity required
