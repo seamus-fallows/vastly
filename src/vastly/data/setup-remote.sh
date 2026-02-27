@@ -84,18 +84,13 @@ if ! git ls-remote "$REPO_URL" HEAD &>/dev/null; then
     3. Your key is loaded in the agent (load it: ssh-add)
   Docs: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
     else
-        die "Cannot access repo via HTTPS. If this is a private repo,
-  HTTPS credentials cannot be securely forwarded to remote instances.
-  To fix this, set up SSH key authentication:
-    1. Generate a key: ssh-keygen -t ed25519
-    2. Add it to ${REPO_HOST}: https://${REPO_HOST}/settings/ssh/new
-    3. Load it into your agent: ssh-add
-    4. Switch your remote: git remote set-url origin git@${REPO_HOST}:<user>/<repo>.git
-  Docs: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
+        warn "Could not verify HTTPS repo access -- will attempt clone anyway"
     fi
 fi
 
 # ── Step 5: Clone ──────────────────────────────────────────────────────
+
+CLONE_OK=true
 
 mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
@@ -106,8 +101,16 @@ if [[ -d "$REPO_NAME" ]]; then
     git pull --ff-only 2>&1 || warn "git pull failed -- continuing with existing code"
 else
     log "Cloning ${REPO_URL} into ${REPO_DIR}"
-    git clone "$REPO_URL" "$REPO_NAME" || die "git clone failed"
-    cd "$REPO_NAME"
+    if git clone "$REPO_URL" "$REPO_NAME"; then
+        cd "$REPO_NAME"
+    else
+        CLONE_OK=false
+        if [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
+            die "git clone failed"
+        else
+            warn "git clone failed -- continuing setup without repo"
+        fi
+    fi
 fi
 
 # ── Step 6: Python environment detection ────────────────────────────────
@@ -153,9 +156,12 @@ if [[ -z "$PYTHON_PATH" ]]; then
     warn "No Python interpreter found -- skipping dependency install"
 fi
 
-# ── Step 7: Install dependencies ────────────────────────────────────────
+# ── Steps 7-9: Install dependencies, post-install, IDE settings ───────
+# These steps require the repo to be cloned -- skip if clone failed.
 
 INSTALL_METHOD="none"
+
+if [[ "$CLONE_OK" == true ]]; then
 
 run_install() {
     local cmd="$1"
@@ -192,8 +198,7 @@ else
     log "No Python interpreter available -- skipping dependency install"
 fi
 
-# ── Step 8: Post-install commands ───────────────────────────────────────
-
+# Post-install commands
 if [[ ${#POST_INSTALL_COMMANDS[@]} -gt 0 ]]; then
     for cmd in "${POST_INSTALL_COMMANDS[@]}"; do
         [[ -z "$cmd" ]] && continue
@@ -202,8 +207,7 @@ if [[ ${#POST_INSTALL_COMMANDS[@]} -gt 0 ]]; then
     done
 fi
 
-# ── Step 9: IDE settings ───────────────────────────────────────────────
-
+# IDE settings
 # For VS Code settings, prefer the venv python, fall back to detected
 VSCODE_PYTHON="$PYTHON_PATH"
 if [[ -x /venv/main/bin/python ]]; then
@@ -225,6 +229,10 @@ cat > .vscode/settings.json << VSCEOF
     }
 }
 VSCEOF
+
+else
+    warn "Skipping dependency install, post-install, and IDE settings (no repo)"
+fi
 
 # ── Step 10: Patch .bashrc ──────────────────────────────────────────────
 
@@ -271,14 +279,15 @@ fi
 
 # ── Step 12: Write setup marker ───────────────────────────────────────
 
-MARKER_DIR="$HOME/.vastly/setup"
-TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+if [[ "$CLONE_OK" == true ]]; then
+    MARKER_DIR="$HOME/.vastly/setup"
+    TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
-log "Writing setup marker to ${MARKER_DIR}/${REPO_NAME}.json"
-mkdir -p "$MARKER_DIR"
-INSTALL_METHOD_ESCAPED="${INSTALL_METHOD//\"/\\\"}"
-REPO_URL_ESCAPED="${REPO_URL//\"/\\\"}"
-cat > "${MARKER_DIR}/${REPO_NAME}.json" << MARKEREOF
+    log "Writing setup marker to ${MARKER_DIR}/${REPO_NAME}.json"
+    mkdir -p "$MARKER_DIR"
+    INSTALL_METHOD_ESCAPED="${INSTALL_METHOD//\"/\\\"}"
+    REPO_URL_ESCAPED="${REPO_URL//\"/\\\"}"
+    cat > "${MARKER_DIR}/${REPO_NAME}.json" << MARKEREOF
 {
     "repoUrl": "${REPO_URL_ESCAPED}",
     "timestamp": "${TIMESTAMP}",
@@ -287,4 +296,7 @@ cat > "${MARKER_DIR}/${REPO_NAME}.json" << MARKEREOF
 }
 MARKEREOF
 
-log "Setup complete for ${REPO_NAME}"
+    log "Setup complete for ${REPO_NAME}"
+else
+    log "Setup complete for ${REPO_NAME} (repo not cloned -- clone manually or re-run with SSH)"
+fi
