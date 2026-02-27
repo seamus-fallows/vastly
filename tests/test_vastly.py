@@ -1277,3 +1277,61 @@ class TestAliases:
         result = select_instance(instances, "1xRTX4090-TW")
         assert len(result) == 1
         assert result[0]["alias"] == "train"
+
+
+class TestCp:
+    """Test _cmd_cp path resolution and SCP invocation."""
+
+    def test_cp_raises_outside_git_repo(self, monkeypatch):
+        from vastly.cli import _cmd_cp
+
+        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
+        args = type("Args", (), {
+            "direction": "down", "path": "file.txt",
+            "instance": None, "verbose": False,
+        })()
+        with pytest.raises(VastlyError, match="Not in a git repo"):
+            _cmd_cp(args)
+
+    def test_cp_raises_when_no_remote(self, monkeypatch):
+        from vastly.cli import _cmd_cp
+
+        monkeypatch.setattr("vastly.cli._git_root", lambda: Path("/repo"))
+        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: {
+            "ide": "code", "sshUser": "root", "sshKeyPath": None,
+            "portForwards": [], "workspace": "/workspace",
+            "disableAutoTmux": False, "gitRemote": "origin",
+            "postInstall": [], "installCommand": None, "copyFiles": [],
+        })
+        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: True)
+        monkeypatch.setattr("vastly.cli._local_repo_info", lambda _: None)
+
+        args = type("Args", (), {
+            "direction": "down", "path": "file.txt",
+            "instance": None, "verbose": False,
+        })()
+        with pytest.raises(VastlyError, match="Could not determine repo name"):
+            _cmd_cp(args)
+
+    def test_cp_up_raises_when_local_file_missing(self, monkeypatch, tmp_path):
+        from vastly.cli import _cmd_cp
+
+        monkeypatch.setattr("vastly.cli._git_root", lambda: tmp_path)
+        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: {
+            "ide": "code", "sshUser": "root", "sshKeyPath": None,
+            "portForwards": [], "workspace": "/workspace",
+            "disableAutoTmux": False, "gitRemote": "origin",
+            "postInstall": [], "installCommand": None, "copyFiles": [],
+        })
+        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: True)
+        monkeypatch.setattr("vastly.cli._local_repo_info", lambda _: ("url", "repo"))
+        monkeypatch.setattr("vastly.cli.get_synced_instances", lambda _: [
+            {"name": "test", "id": 1, "alias": None},
+        ])
+
+        args = type("Args", (), {
+            "direction": "up", "path": "nonexistent.txt",
+            "instance": None, "verbose": False,
+        })()
+        with pytest.raises(VastlyError, match="Local path not found"):
+            _cmd_cp(args)

@@ -338,6 +338,67 @@ def _vastai_destroy(inst: dict, config: dict) -> None:
                 alias_config.unlink()
 
 
+def _cmd_cp(args) -> None:
+    """Copy files to/from a remote instance."""
+    import shlex
+    from pathlib import PurePosixPath
+
+    from vastly.ssh import run_scp, run_ssh
+
+    git_root = _git_root()
+    if not git_root:
+        raise VastlyError("Not in a git repo. vst cp requires a git repo to resolve paths.")
+
+    config = load_config(project_dir=git_root)
+
+    if not _check_prerequisites(ide=config["ide"]):
+        return
+
+    repo_info = _local_repo_info(config["gitRemote"])
+    if not repo_info:
+        raise VastlyError("Could not determine repo name from git remote.")
+    _, repo_name = repo_info
+
+    instances = get_synced_instances(config)
+    inst = _select_single_instance(instances, args.instance)
+
+    remote_base = f"{config['workspace']}/{repo_name}"
+    rel_path = args.path.rstrip("/\\")
+    remote_path = f"{remote_base}/{rel_path}"
+    local_path = git_root / rel_path
+
+    # Detect if path is a directory (for recursive copy)
+    is_dir = args.path.endswith("/") or args.path.endswith("\\")
+    if args.direction == "up" and local_path.exists():
+        is_dir = is_dir or local_path.is_dir()
+
+    if args.direction == "down":
+        # Remote -> local
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        src = f"{inst['name']}:{remote_path}"
+        if is_dir:
+            src = f"{inst['name']}:{remote_path}/"
+        result = run_scp(src, str(local_path), recursive=is_dir)
+        if result.returncode != 0:
+            msg = result.stderr.strip() or "unknown error"
+            raise VastlyError(f"Download failed: {msg}")
+        print(green(f"  Downloaded {rel_path}"))
+    else:
+        # Local -> remote: ensure parent directory exists on remote
+        if not local_path.exists():
+            raise VastlyError(f"Local path not found: {rel_path}")
+        parent_rel = str(PurePosixPath(rel_path).parent)
+        if parent_rel != ".":
+            remote_parent = f"{remote_base}/{parent_rel}"
+            run_ssh(inst["name"], f"mkdir -p {shlex.quote(remote_parent)}")
+        dest = f"{inst['name']}:{remote_path}"
+        result = run_scp(str(local_path), dest, recursive=is_dir)
+        if result.returncode != 0:
+            msg = result.stderr.strip() or "unknown error"
+            raise VastlyError(f"Upload failed: {msg}")
+        print(green(f"  Uploaded {rel_path}"))
+
+
 # ── Entry point ──────────────────────────────────────────────────────
 
 
@@ -347,7 +408,7 @@ def main() -> None:
         prog="vst",
         description="Connect to Vast.ai instances: sync SSH, set up your project, and open your IDE.",
         epilog=(
-            "commands: connect, list, stop, destroy, name\n"
+            "commands: connect, list, stop, destroy, name, cp\n"
             "run vst <command> --help for details\n\n"
             "alias:         `vastly` and `vst` are the same command\n"
             "prerequisites: vastai CLI (pip install vastai), git, ssh, VS Code or Cursor\n"
@@ -390,6 +451,15 @@ def main() -> None:
     destroy_parser.add_argument("--all", action="store_true", help="destroy all instances")
     destroy_parser.add_argument("-v", "--verbose", action="store_true")
 
+    # Cp
+    cp_parser = subparsers.add_parser("cp", help="copy files to/from a remote instance")
+    cp_parser.add_argument("direction", choices=["up", "down"])
+    cp_parser.add_argument("path", help="relative file path")
+    cp_parser.add_argument(
+        "-i", "--instance", help="instance name (default: auto-select or picker)",
+    )
+    cp_parser.add_argument("-v", "--verbose", action="store_true")
+
     # Name
     name_parser = subparsers.add_parser("name", help="assign a custom name to an instance")
     name_parser.add_argument("alias", help="custom name to assign")
@@ -423,6 +493,8 @@ def main() -> None:
             _cmd_destroy(args)
         elif args.command == "name":
             _cmd_name(args)
+        elif args.command == "cp":
+            _cmd_cp(args)
     except KeyboardInterrupt:
         print(file=sys.stderr)  # clean up partial line
         sys.exit(130)  # standard exit code for SIGINT
