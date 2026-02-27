@@ -61,7 +61,12 @@ if [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
     if [[ -n "$REPO_HOST" ]] && ! grep -q "^${REPO_HOST} " ~/.ssh/known_hosts 2>/dev/null; then
         log "Adding ${REPO_HOST} to known_hosts"
         mkdir -p ~/.ssh
-        ssh-keyscan "$REPO_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+        _keys=$(ssh-keyscan "$REPO_HOST" 2>/dev/null)
+        if [ -n "$_keys" ]; then
+            echo "$_keys" >> ~/.ssh/known_hosts
+        else
+            warn "Could not fetch SSH host keys for ${REPO_HOST}"
+        fi
     fi
 else
     REPO_HOST=$(echo "$REPO_URL" | sed -n 's|https\?://\([^/]*\).*|\1|p')
@@ -98,7 +103,7 @@ cd "$WORKSPACE"
 if [[ -d "$REPO_NAME" ]]; then
     log "Repo already exists, pulling latest changes"
     cd "$REPO_NAME"
-    git pull --ff-only 2>/dev/null || warn "git pull failed -- continuing with existing code"
+    git pull --ff-only 2>&1 || warn "git pull failed -- continuing with existing code"
 else
     log "Cloning ${REPO_URL} into ${REPO_DIR}"
     git clone "$REPO_URL" "$REPO_NAME" || die "git clone failed"
