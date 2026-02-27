@@ -1110,3 +1110,94 @@ class TestUpdateCheck:
         )
 
         check_for_update()  # Should not raise
+
+
+class TestStopDestroy:
+    """Test _cmd_stop, _cmd_destroy, _vastai_action, and _select_single_instance."""
+
+    def test_vastai_action_stop(self, monkeypatch):
+        from vastly.cli import _vastai_action
+
+        captured_cmd = []
+
+        def fake_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr("vastly.cli.subprocess.run", fake_run)
+
+        inst = {"name": "1xRTX4090-TW", "id": 12345}
+        _vastai_action("stop", inst)
+
+        assert "vastai" in captured_cmd
+        assert "stop" in captured_cmd
+        assert "12345" in captured_cmd
+
+    def test_vastai_action_raises_on_failure(self, monkeypatch):
+        from vastly.cli import _vastai_action
+
+        monkeypatch.setattr(
+            "vastly.cli.subprocess.run",
+            lambda *a, **kw: type("R", (), {"returncode": 1, "stdout": "", "stderr": "error msg"})(),
+        )
+
+        inst = {"name": "test", "id": 1}
+        with pytest.raises(VastlyError, match="Failed to stop"):
+            _vastai_action("stop", inst)
+
+    def test_vastai_action_raises_on_cached_instance(self):
+        from vastly.cli import _vastai_action
+
+        inst = {"name": "test", "id": None}
+        with pytest.raises(VastlyError, match="Cannot stop cached instance"):
+            _vastai_action("stop", inst)
+
+    def test_select_single_instance_by_name(self):
+        from vastly.cli import _select_single_instance
+
+        instances = [
+            {"name": "1xRTX3060-TW", "id": 100},
+            {"name": "2xA100-US", "id": 200},
+        ]
+        result = _select_single_instance(instances, "2xA100-US")
+        assert result["name"] == "2xA100-US"
+
+    def test_select_single_instance_auto_select(self):
+        from vastly.cli import _select_single_instance
+
+        instances = [{"name": "1xRTX3060-TW", "id": 100}]
+        result = _select_single_instance(instances, None)
+        assert result["name"] == "1xRTX3060-TW"
+
+    def test_select_single_instance_bad_name_raises(self):
+        from vastly.cli import _select_single_instance
+
+        instances = [{"name": "1xRTX3060-TW", "id": 100}]
+        with pytest.raises(VastlyError, match="No instance named"):
+            _select_single_instance(instances, "NOPE")
+
+    def test_stop_name_and_all_raises(self, monkeypatch):
+        """Cannot specify both a name and --all."""
+        from vastly.cli import _cmd_stop
+
+        args = type("Args", (), {"name": "test", "all": True, "verbose": False})()
+        with pytest.raises(VastlyError, match="Cannot specify both"):
+            _cmd_stop(args)
+
+    def test_confirm_yes(self, monkeypatch):
+        from vastly.cli import _confirm
+
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+        assert _confirm("Do it?") is True
+
+    def test_confirm_no(self, monkeypatch):
+        from vastly.cli import _confirm
+
+        monkeypatch.setattr("builtins.input", lambda _: "n")
+        assert _confirm("Do it?") is False
+
+    def test_confirm_default_no(self, monkeypatch):
+        from vastly.cli import _confirm
+
+        monkeypatch.setattr("builtins.input", lambda _: "")
+        assert _confirm("Do it?") is False

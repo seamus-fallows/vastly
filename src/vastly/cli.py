@@ -83,6 +83,54 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     return repo_url, repo_name
 
 
+def _confirm(prompt: str) -> bool:
+    """Ask the user for y/N confirmation. Default is No."""
+    try:
+        answer = input(f"{prompt} [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer == "y"
+
+
+def _select_single_instance(
+    instances: list[dict], name: str | None
+) -> dict:
+    """Select exactly one instance by name, auto-select, or picker.
+
+    Unlike select_instance which can return multiple via 'all', this
+    always returns a single instance dict.
+    """
+    if name:
+        match = [i for i in instances if i["name"] == name]
+        if not match:
+            names = [i["name"] for i in instances]
+            raise VastlyError(f"No instance named '{name}'. Available: {', '.join(names)}")
+        return match[0]
+
+    if len(instances) == 1:
+        return instances[0]
+
+    # Interactive selection (no "all" option)
+    names = [i["name"] for i in instances]
+    print("Select instance:")
+    for i, n in enumerate(names):
+        print(f"  [{i + 1}] {n}")
+
+    try:
+        choice = input("Choice: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        raise VastlyError("No instance selected.")
+
+    if not choice.isdigit():
+        raise VastlyError("No instance selected.")
+
+    idx = int(choice)
+    if idx < 1 or idx > len(names):
+        raise VastlyError("No instance selected.")
+
+    return instances[idx - 1]
+
+
 # ── Subcommand handlers ──────────────────────────────────────────────
 
 
@@ -149,6 +197,87 @@ def _cmd_list(args) -> None:
     show_table(instances)
 
 
+def _cmd_stop(args) -> None:
+    """Stop one or more running instances."""
+    if args.name and args.all:
+        raise VastlyError("Cannot specify both an instance name and --all")
+
+    git_root = _git_root()
+    config = load_config(project_dir=git_root)
+
+    if not _check_prerequisites(ide=config["ide"]):
+        return
+
+    instances = get_synced_instances(config)
+
+    if args.all:
+        if not _confirm(f"Stop {len(instances)} instances?"):
+            return
+        for inst in instances:
+            _vastai_action("stop", inst)
+        return
+
+    inst = _select_single_instance(instances, args.name)
+    _vastai_action("stop", inst)
+
+
+def _cmd_destroy(args) -> None:
+    """Destroy one or more instances (irreversible)."""
+    if args.name and args.all:
+        raise VastlyError("Cannot specify both an instance name and --all")
+
+    git_root = _git_root()
+    config = load_config(project_dir=git_root)
+
+    if not _check_prerequisites(ide=config["ide"]):
+        return
+
+    instances = get_synced_instances(config)
+
+    if args.all:
+        if not _confirm(f"Destroy {len(instances)} instances? This is irreversible."):
+            return
+        for inst in instances:
+            _vastai_destroy(inst, config)
+        return
+
+    inst = _select_single_instance(instances, args.name)
+    if not _confirm(f"Destroy {inst['name']}? This is irreversible."):
+        return
+    _vastai_destroy(inst, config)
+
+
+def _vastai_action(action: str, inst: dict) -> None:
+    """Run 'vastai stop/destroy instance <id>' and print result."""
+    inst_id = inst.get("id")
+    if not inst_id:
+        raise VastlyError(f"Cannot {action} cached instance '{inst['name']}' (no instance ID)")
+
+    result = subprocess.run(
+        ["vastai", action, "instance", str(inst_id)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise VastlyError(f"Failed to {action} {inst['name']}: {msg}")
+
+    action_past = "Stopped" if action == "stop" else "Destroyed"
+    print(green(f"  {action_past} {inst['name']}"))
+
+
+def _vastai_destroy(inst: dict, config: dict) -> None:
+    """Destroy an instance and clean up its SSH config."""
+    from vastly.ssh import SSH_CONFIG_DIR
+
+    _vastai_action("destroy", inst)
+
+    # Clean up SSH config for the destroyed instance
+    config_file = SSH_CONFIG_DIR / inst["name"]
+    if config_file.exists():
+        config_file.unlink()
+
+
 # ── Entry point ──────────────────────────────────────────────────────
 
 
@@ -158,7 +287,7 @@ def main() -> None:
         prog="vst",
         description="Connect to Vast.ai instances: sync SSH, set up your project, and open your IDE.",
         epilog=(
-            "commands: connect, list\n"
+            "commands: connect, list, stop, destroy\n"
             "run vst <command> --help for details\n\n"
             "alias:         `vastly` and `vst` are the same command\n"
             "prerequisites: vastai CLI (pip install vastai), git, ssh, VS Code or Cursor\n"
@@ -189,6 +318,18 @@ def main() -> None:
     list_parser = subparsers.add_parser("list", help="list running instances")
     list_parser.add_argument("-v", "--verbose", action="store_true")
 
+    # Stop
+    stop_parser = subparsers.add_parser("stop", help="stop a running instance")
+    stop_parser.add_argument("name", nargs="?", help="instance name")
+    stop_parser.add_argument("--all", action="store_true", help="stop all running instances")
+    stop_parser.add_argument("-v", "--verbose", action="store_true")
+
+    # Destroy
+    destroy_parser = subparsers.add_parser("destroy", help="destroy an instance (irreversible)")
+    destroy_parser.add_argument("name", nargs="?", help="instance name")
+    destroy_parser.add_argument("--all", action="store_true", help="destroy all instances")
+    destroy_parser.add_argument("-v", "--verbose", action="store_true")
+
     args = parser.parse_args()
 
     # No subcommand = connect with auto-select
@@ -207,6 +348,10 @@ def main() -> None:
             _cmd_connect(args)
         elif args.command == "list":
             _cmd_list(args)
+        elif args.command == "stop":
+            _cmd_stop(args)
+        elif args.command == "destroy":
+            _cmd_destroy(args)
     except KeyboardInterrupt:
         print(file=sys.stderr)  # clean up partial line
         sys.exit(130)  # standard exit code for SIGINT
