@@ -23,7 +23,22 @@ from vastly.ssh import (
 _ALIASES_FILE = Path.home() / ".vastly" / "aliases.json"
 
 # Reserved names that cannot be used as aliases
-_RESERVED_NAMES = {"connect", "stop", "destroy", "cp", "name", "list"}
+_RESERVED_NAMES = {
+    "connect",
+    "stop",
+    "destroy",
+    "cp",
+    "name",
+    "list",
+    "start",
+    "config",
+}
+
+# Instance lifecycle state classifications
+STOPPABLE_STATES = {"running", "scheduling", "loading", "creating", "connecting"}
+ALREADY_STOPPED_STATES = {"stopped", "exited"}
+STARTABLE_STATES = {"stopped", "exited"}
+TRANSITIONAL_STATES = {"loading", "creating", "connecting", "scheduling"}
 
 
 def fetch_instances() -> list[dict]:
@@ -31,11 +46,15 @@ def fetch_instances() -> list[dict]:
 
     Raises APIError if the API is unreachable or returns invalid data.
     """
-    result = subprocess.run(
-        ["vastai", "show", "instances", "--raw"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["vastai", "show", "instances", "--raw"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        raise APIError("vastai command timed out. Check your internet connection.")
     if result.returncode != 0:
         if result.stderr.strip():
             raise APIError(f"vastai: {result.stderr.strip()}")
@@ -103,7 +122,9 @@ def validate_alias(alias: str, instances: list[dict], aliases: dict[str, str]) -
             f"Invalid alias '{alias}'. Must be lowercase alphanumeric with hyphens."
         )
     if alias in _RESERVED_NAMES:
-        raise VastlyError(f"'{alias}' is a reserved command name and cannot be used as an alias.")
+        raise VastlyError(
+            f"'{alias}' is a reserved command name and cannot be used as an alias."
+        )
 
     # Check collision with auto-generated names
     auto_names = {i["name"] for i in instances}
@@ -113,7 +134,9 @@ def validate_alias(alias: str, instances: list[dict], aliases: dict[str, str]) -
     # Check collision with other aliases
     for inst_id, existing_alias in aliases.items():
         if existing_alias == alias:
-            raise VastlyError(f"Alias '{alias}' is already assigned to instance {inst_id}.")
+            raise VastlyError(
+                f"Alias '{alias}' is already assigned to instance {inst_id}."
+            )
 
 
 def format_uptime(unix_ts) -> str:
@@ -130,10 +153,13 @@ def format_uptime(unix_ts) -> str:
 
 
 def sync_instances(config: dict) -> list[dict]:
-    """Sync running instances from the API to SSH configs.
+    """Sync instances from the API to SSH configs.
 
-    Returns a list of instance dicts with keys: name, id, dph_total,
-    gpu_name, num_gpus, start_date, cached.
+    Returns a list of instance dicts for ALL states (running, stopped,
+    exited, etc.) with keys: name, id, dph_total, gpu_name, num_gpus,
+    start_date, cached, status, alias.
+
+    SSH configs are only written for running instances.
 
     Raises APIError if the API is unreachable and no cached configs exist.
     """
@@ -142,7 +168,7 @@ def sync_instances(config: dict) -> list[dict]:
 
     print(dim("Syncing instances..."))
     try:
-        all_instances = fetch_instances()
+        all_api = fetch_instances()
     except APIError:
         cached = cached_config_names()
         if cached:
@@ -156,23 +182,24 @@ def sync_instances(config: dict) -> list[dict]:
                     "gpu_name": "",
                     "num_gpus": 0,
                     "start_date": None,
+                    "status": "running",
+                    "alias": None,
                 }
                 for n in cached
             ]
         raise
 
-    running = [i for i in all_instances if i.get("cur_state") == "running"]
-    vastly.verbose(f"API returned {len(all_instances)} instances, {len(running)} running")
+    running = [i for i in all_api if i.get("cur_state") == "running"]
+    non_running = [i for i in all_api if i.get("cur_state") != "running"]
+    vastly.verbose(f"API returned {len(all_api)} instances, {len(running)} running")
 
     clear_ssh_configs()
-
-    if not running:
-        return []
 
     seen: set[str] = set()
     used_ports: set[int] = set()
     results = []
 
+    # Process running instances first (they get SSH configs and clean names)
     for inst in running:
         name = build_instance_name(inst, seen)
 
@@ -206,6 +233,7 @@ def sync_instances(config: dict) -> list[dict]:
                 "num_gpus": inst.get("num_gpus", 0),
                 "start_date": inst.get("start_date"),
                 "cached": False,
+                "status": "running",
                 "alias": None,
                 # Store SSH config params for alias config generation
                 "_host": inst["public_ipaddr"],
@@ -216,60 +244,124 @@ def sync_instances(config: dict) -> list[dict]:
             }
         )
 
-    # Write alias SSH configs and attach aliases to instance dicts
+    # Process non-running instances (no SSH config, no port extraction)
+    for inst in non_running:
+        name = build_instance_name(inst, seen)
+        results.append(
+            {
+                "name": name,
+                "id": inst["id"],
+                "dph_total": inst.get("dph_total", 0),
+                "gpu_name": inst.get("gpu_name", ""),
+                "num_gpus": inst.get("num_gpus", 0),
+                "start_date": inst.get("start_date"),
+                "cached": False,
+                "status": inst.get("cur_state", "unknown"),
+                "alias": None,
+            }
+        )
+
+    # Prune aliases for instances that no longer exist in the API at all
     aliases = load_aliases()
-    active_ids = {str(r["id"]) for r in results}
-    stale_ids = [k for k in aliases if k not in active_ids]
+    all_api_ids = {str(r["id"]) for r in results}
+    stale_ids = [k for k in aliases if k not in all_api_ids]
     if stale_ids:
         for k in stale_ids:
             del aliases[k]
         save_aliases(aliases)
 
+    # Write alias SSH configs (running only) and attach aliases to all instances
     for r in results:
         inst_id = str(r["id"])
         alias = aliases.get(inst_id)
         if alias:
             r["alias"] = alias
-            write_ssh_config(
-                alias,
-                host=r["_host"],
-                port=r["_port"],
-                user=r["_user"],
-                key_path=r["_key_path"],
-                local_forwards=r["_local_forwards"],
-            )
+            if r["status"] == "running":
+                write_ssh_config(
+                    alias,
+                    host=r["_host"],
+                    port=r["_port"],
+                    user=r["_user"],
+                    key_path=r["_key_path"],
+                    local_forwards=r["_local_forwards"],
+                )
 
     # Clean up internal keys not needed by callers
     for r in results:
         for k in ("_host", "_port", "_user", "_key_path", "_local_forwards"):
-            del r[k]
+            r.pop(k, None)
 
     return results
 
 
 def get_synced_instances(config: dict) -> list[dict]:
-    """Sync and return instances.
+    """Sync and return all instances (any state).
 
-    Raises VastlyError if no running instances exist.
+    Raises VastlyError if no instances exist at all.
     Raises APIError if the API is unreachable and no cached configs exist.
     """
     result = sync_instances(config)
     if not result:
-        raise VastlyError("No running Vast instances.")
+        raise VastlyError("No Vast instances found.")
     return result
 
 
+def get_running_instances(config: dict) -> list[dict]:
+    """Sync and return only running instances.
+
+    Raises VastlyError if no running instances exist. When stopped/exited
+    instances exist, the error message suggests vst list and vst start.
+    """
+    all_instances = sync_instances(config)
+    running = [i for i in all_instances if i.get("status") == "running"]
+    if not running:
+        stopped = [i for i in all_instances if i.get("status") != "running"]
+        if stopped:
+            raise VastlyError(
+                f"No running instances. {len(stopped)} stopped/exited. "
+                "Use 'vst list' to see all, 'vst start' to restart."
+            )
+        raise VastlyError("No Vast instances found.")
+    return running
+
+
 def show_table(instances: list[dict]) -> None:
-    """Print a compact instance table."""
+    """Print a compact, column-aligned instance table."""
+    if not instances:
+        print()
+        return
+
+    # Build rows: (label, cost, right_col, is_running, is_cached)
+    rows: list[tuple[str, str, str, bool, bool]] = []
     for inst in instances:
         if inst["cached"]:
-            print(f"  {inst['name']}  {dim('(cached)')}")
+            rows.append((inst["name"], "", "(cached)", False, True))
         else:
-            alias = inst.get("alias")
-            label = f"{alias} ({inst['name']})" if alias else inst["name"]
+            label = _display_name(inst)
             cost = f"${inst['dph_total']:.2f}/hr"
-            uptime = format_uptime(inst["start_date"])
-            print(f"  {label}   {cost}   {uptime} uptime")
+            if inst.get("status") == "running":
+                rows.append(
+                    (
+                        label,
+                        cost,
+                        f"{format_uptime(inst['start_date'])} uptime",
+                        True,
+                        False,
+                    )
+                )
+            else:
+                rows.append((label, cost, inst.get("status", "unknown"), False, False))
+
+    label_w = max(len(r[0]) for r in rows)
+    cost_w = max((len(r[1]) for r in rows), default=0)
+
+    for label, cost, right, is_running, is_cached in rows:
+        if is_cached:
+            print(f"  {label.ljust(label_w)}  {dim('(cached)')}")
+        elif is_running:
+            print(f"  {label.ljust(label_w)}  {cost.ljust(cost_w)}  {right}")
+        else:
+            print(dim(f"  {label.ljust(label_w)}  {cost.ljust(cost_w)}  {right}"))
     print()
 
 
@@ -279,39 +371,50 @@ def _display_name(inst: dict) -> str:
     return f"{alias} ({inst['name']})" if alias else inst["name"]
 
 
-def select_instance(instances: list[dict], name: str | None = None) -> list[dict]:
-    """Select instance(s) by name or alias, auto-select if only one, or prompt interactively."""
+def select_instance(
+    instances: list[dict],
+    name: str | None = None,
+    *,
+    allow_all: bool = False,
+) -> list[dict]:
+    """Select instance(s) by name/alias, auto-select if only one, or prompt.
+
+    When allow_all is True, shows an "[a] All" option for multi-instance selection.
+    Always returns a non-empty list. Raises VastlyError on cancel or invalid input.
+    """
     if name:
         match = [i for i in instances if i["name"] == name or i.get("alias") == name]
         if not match:
             labels = [_display_name(i) for i in instances]
-            raise VastlyError(f"No instance named '{name}'. Available: {', '.join(labels)}")
+            raise VastlyError(
+                f"No instance named '{name}'. Available: {', '.join(labels)}"
+            )
         return match
-
-    names = [_display_name(i) for i in instances]
 
     if len(instances) == 1:
         return [instances[0]]
 
     # Interactive selection
+    labels = [_display_name(i) for i in instances]
     print("Select instance:")
-    for i, n in enumerate(names):
-        print(f"  [{i + 1}] {n}")
-    print("  [a] All")
+    for i, label in enumerate(labels):
+        print(f"  [{i + 1}] {label}")
+    if allow_all:
+        print("  [a] All")
 
     try:
         choice = input("Choice: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
-        return []
+        raise VastlyError("No instance selected.")
 
-    if choice == "a":
+    if allow_all and choice == "a":
         return list(instances)
 
     if not choice.isdigit():
-        return []
+        raise VastlyError("No instance selected.")
 
     idx = int(choice)
-    if idx < 1 or idx > len(names):
-        return []
+    if idx < 1 or idx > len(instances):
+        raise VastlyError("No instance selected.")
 
     return [instances[idx - 1]]

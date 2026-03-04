@@ -28,7 +28,14 @@ DEFAULTS = {
 }
 
 _STRING_KEYS = {"ide", "sshUser", "workspace", "gitRemote"}
-_PROJECT_KEYS = {"postInstall", "installCommand", "workspace", "portForwards", "copyFiles", "gitRemote"}
+_PROJECT_KEYS = {
+    "postInstall",
+    "installCommand",
+    "workspace",
+    "portForwards",
+    "copyFiles",
+    "gitRemote",
+}
 
 
 def _ide_from_env() -> str | None:
@@ -137,7 +144,9 @@ def _validate_config(config: dict) -> None:
             )
         for field in ("local", "remote"):
             if field not in entry or not isinstance(entry[field], int):
-                actual = type(entry.get(field)).__name__ if field in entry else "missing"
+                actual = (
+                    type(entry.get(field)).__name__ if field in entry else "missing"
+                )
                 raise ConfigError(
                     f"Invalid config: 'portForwards[{i}].{field}' must be an int, "
                     f"got {actual}"
@@ -180,9 +189,7 @@ def _warn_unknown_keys(raw: dict, source: str) -> None:
         print(f"Warning: unrecognized config keys in {source}: {keys}", file=sys.stderr)
 
 
-def load_config(
-    path: Path | None = None, *, project_dir: Path | None = None
-) -> dict:
+def load_config(path: Path | None = None, *, project_dir: Path | None = None) -> dict:
     """Load config from disk, creating from template if missing.
 
     If ``project_dir`` is given and contains a ``.vastly.json``, project-specific
@@ -198,10 +205,10 @@ def load_config(
         config_data = json.loads(template.read_text(encoding="utf-8"))
         config_data["ide"] = _detect_ide()
         path.write_text(json.dumps(config_data, indent=2) + "\n", encoding="utf-8")
-        print(f"Created config at {path}")
-        print("Edit it to change IDE, SSH key, port forwarding, and more.")
-        print("Tip: add a .vastly.json to any repo for project-specific settings.")
-        print("Tip: you can also run this command as `vst` for short.")
+        print(f"Created config at {path}\n")
+        print("Run 'vst' from a git repo to connect to your Vast.ai instance.")
+        print("It syncs SSH, clones your repo, installs deps, and opens your IDE.")
+        print("Run 'vst -h' for all commands.")
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))

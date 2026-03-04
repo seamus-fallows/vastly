@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import socket
 import subprocess
+import sys
 from pathlib import Path
 
 import vastly
@@ -20,6 +21,7 @@ def _atomic_write(path: Path, content: str) -> None:
     tmp = path.parent / (path.name + ".vastly-tmp")
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(path)  # atomic on POSIX; best-effort on Windows
+
 
 # Quick probes (echo ok, test -f, find): fail fast on dead connections
 SSH_OPTS = [
@@ -100,7 +102,7 @@ def write_ssh_config(
         f"    User {user}",
         "    ForwardAgent yes",
         "    StrictHostKeyChecking no",
-        "    UserKnownHostsFile /dev/null",
+        f"    UserKnownHostsFile {'NUL' if sys.platform == 'win32' else '/dev/null'}",
         "    LogLevel ERROR",
     ]
 
@@ -157,7 +159,9 @@ def run_ssh(
             return subprocess.run(cmd, text=True, timeout=deadline)
         return subprocess.run(cmd, capture_output=True, text=True, timeout=deadline)
     except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="timeout")
+        return subprocess.CompletedProcess(
+            cmd, returncode=1, stdout="", stderr="timeout"
+        )
 
 
 def run_scp(

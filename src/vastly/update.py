@@ -15,8 +15,22 @@ _CHECK_INTERVAL = 7 * 24 * 3600  # 7 days
 
 
 def _parse_version(v: str) -> tuple[int, ...]:
-    """Parse a dotted version string into a tuple of ints for comparison."""
-    return tuple(int(x) for x in v.split("."))
+    """Parse a dotted version string into a tuple of ints for comparison.
+
+    Strips pre-release suffixes (e.g. '0a1' -> 0, '4rc2' -> 4) so that
+    versions like '0.4.0a1' or '1.0.0.dev1' don't raise ValueError.
+    """
+    parts = []
+    for segment in v.split("."):
+        # Take only the leading digits from each segment
+        digits = ""
+        for ch in segment:
+            if ch.isdigit():
+                digits += ch
+            else:
+                break
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
 
 
 def check_for_update() -> None:
@@ -46,7 +60,11 @@ def check_for_update() -> None:
         _CACHE_FILE.write_text(str(time.time()), encoding="utf-8")
 
         if _parse_version(latest) > _parse_version(__version__):
-            print(dim(f"  vastly {latest} available (you have {__version__}). "
-                      "Update: pip install -U vastly"))
+            print(
+                dim(
+                    f"  vastly {latest} available (you have {__version__}). "
+                    "Update: pip install -U vastly"
+                )
+            )
     except Exception:
         pass

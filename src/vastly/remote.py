@@ -58,6 +58,7 @@ def setup_instances(
 
     q_repo = shlex.quote(repo_name)
     sep = "__VASTLY_SEP__"
+    https_warned = False
 
     for inst in instances:
         name = inst["name"]
@@ -122,14 +123,29 @@ def setup_instances(
                 )
             )
             try:
-                answer = input(
-                    f"  Continue with setup for '{repo_name}'? [y/N] "
-                ).strip().lower()
+                answer = (
+                    input(f"  Continue with setup for '{repo_name}'? [y/N] ")
+                    .strip()
+                    .lower()
+                )
             except (EOFError, KeyboardInterrupt):
                 answer = ""
             if answer != "y":
                 print(f"  {name}: skipped.")
                 continue
+
+        # Warn about HTTPS limitation (once)
+        if not https_warned and repo_url.startswith("https://"):
+            https_warned = True
+            suggestion = repo_url.replace("https://", "git@", 1).replace("/", ":", 1)
+            fix_url = suggestion if suggestion.endswith(".git") else suggestion + ".git"
+            print(
+                yellow(
+                    f"\n  Note: HTTPS remote -- pushing won't work from the instance\n"
+                    f"  (credentials can't be forwarded). To fix:\n"
+                    f"    git remote set-url {config['gitRemote']} {fix_url}\n"
+                )
+            )
 
         # Setup is needed -- git identity required
         if not git_name or not git_email:
@@ -176,7 +192,11 @@ def setup_instances(
             for rel_path in copy_files:
                 local_path = project_dir / rel_path
                 if not local_path.exists():
-                    print(yellow(f"  {name}: copyFiles: {rel_path} not found locally, skipping"))
+                    print(
+                        yellow(
+                            f"  {name}: copyFiles: {rel_path} not found locally, skipping"
+                        )
+                    )
                     continue
                 remote_dest = f"{name}:{remote_base}/{rel_path}"
                 print(cyan(f"  {name}: copying {rel_path}"))

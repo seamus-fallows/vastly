@@ -3,25 +3,34 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import vastly
-from vastly import __version__, green, red, yellow
+from vastly import __version__, cyan, dim, green, red, yellow
 from vastly.config import load_config
 from vastly.errors import VastlyError
 from vastly.ide import check_ide, open_ide
 from vastly.instance import (
+    ALREADY_STOPPED_STATES,
+    STARTABLE_STATES,
+    STOPPABLE_STATES,
+    TRANSITIONAL_STATES,
+    _display_name,
+    get_running_instances,
     get_synced_instances,
     load_aliases,
     save_aliases,
     select_instance,
     show_table,
+    sync_instances,
     validate_alias,
 )
 from vastly.remote import setup_instances
+from vastly.ssh import SSH_CONFIG_DIR
 
 
 def _git_root() -> Path | None:
@@ -40,8 +49,8 @@ def _git_root() -> Path | None:
     return Path(top) if top else None
 
 
-def _check_prerequisites(*, need_ide: bool = False, ide: str) -> bool:
-    """Verify required tools are available."""
+def _check_prerequisites(*, need_ide: bool = False, ide: str) -> None:
+    """Verify required tools are available. Exits with code 1 on failure."""
     ok = True
 
     if not shutil.which("vastai"):
@@ -59,13 +68,17 @@ def _check_prerequisites(*, need_ide: bool = False, ide: str) -> bool:
             print(red(f"Missing: {ide}, but {other} is installed."))
             print(red(f'  Update "ide" in ~/.vastly.json to "{other}" to use it.'))
         else:
-            urls = {"code": "https://code.visualstudio.com", "cursor": "https://cursor.com"}
+            urls = {
+                "code": "https://code.visualstudio.com",
+                "cursor": "https://cursor.com",
+            }
             url = urls.get(ide, "")
             hint = f" Download from {url}" if url else ""
             print(red(f"Missing: {ide}.{hint}"))
         ok = False
 
-    return ok
+    if not ok:
+        sys.exit(1)
 
 
 def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
@@ -99,46 +112,6 @@ def _confirm(prompt: str) -> bool:
     return answer == "y"
 
 
-def _select_single_instance(
-    instances: list[dict], name: str | None
-) -> dict:
-    """Select exactly one instance by name, auto-select, or picker.
-
-    Unlike select_instance which can return multiple via 'all', this
-    always returns a single instance dict.
-    """
-    if name:
-        match = [i for i in instances if i["name"] == name or i.get("alias") == name]
-        if not match:
-            from vastly.instance import _display_name
-            labels = [_display_name(i) for i in instances]
-            raise VastlyError(f"No instance named '{name}'. Available: {', '.join(labels)}")
-        return match[0]
-
-    if len(instances) == 1:
-        return instances[0]
-
-    # Interactive selection (no "all" option)
-    names = [i["name"] for i in instances]
-    print("Select instance:")
-    for i, n in enumerate(names):
-        print(f"  [{i + 1}] {n}")
-
-    try:
-        choice = input("Choice: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        raise VastlyError("No instance selected.")
-
-    if not choice.isdigit():
-        raise VastlyError("No instance selected.")
-
-    idx = int(choice)
-    if idx < 1 or idx > len(names):
-        raise VastlyError("No instance selected.")
-
-    return instances[idx - 1]
-
-
 # ── Subcommand handlers ──────────────────────────────────────────────
 
 
@@ -147,15 +120,75 @@ def _cmd_connect(args) -> None:
     git_root = _git_root()
     config = load_config(project_dir=git_root)
 
-    if not _check_prerequisites(need_ide=True, ide=config["ide"]):
-        return
+    _check_prerequisites(need_ide=True, ide=config["ide"])
 
-    instances = get_synced_instances(config)
-    show_table(instances)
+    all_instances = sync_instances(config)
+    running = [i for i in all_instances if i.get("status") == "running"]
 
-    selected = select_instance(instances, args.name)
-    if not selected:
-        return
+    if not running:
+        # Auto-start a stopped instance instead of erroring
+        startable = [i for i in all_instances if i.get("status") in STARTABLE_STATES]
+
+        if args.name:
+            match = [
+                i
+                for i in startable
+                if i["name"] == args.name or i.get("alias") == args.name
+            ]
+            if match:
+                inst = match[0]
+            else:
+                match_all = [
+                    i
+                    for i in all_instances
+                    if i["name"] == args.name or i.get("alias") == args.name
+                ]
+                if match_all:
+                    raise VastlyError(
+                        f"'{args.name}' is {match_all[0].get('status', 'unknown')} and cannot be started."
+                    )
+                raise VastlyError(f"No instance named '{args.name}'.")
+        elif not startable:
+            raise VastlyError("No Vast instances found.")
+        elif len(startable) == 1:
+            inst = startable[0]
+            print(yellow(f"  No running instances. Starting {_display_name(inst)}..."))
+        else:
+            print(yellow("  No running instances. Select one to start:"))
+            show_table(startable)
+            inst = select_instance(startable)[0]
+
+        _vastai_action("start", inst)
+        _poll_for_running(str(inst["id"]))
+
+        # Re-sync for fresh SSH configs
+        all_instances = sync_instances(config)
+        running = [i for i in all_instances if i.get("status") == "running"]
+        if not running:
+            raise VastlyError(
+                "Instance started but not reachable. Check Vast.ai dashboard."
+            )
+
+    show_table(running)
+
+    # If the user named a non-running instance, give a specific error
+    if args.name:
+        match_running = [
+            i for i in running if i["name"] == args.name or i.get("alias") == args.name
+        ]
+        if not match_running:
+            match_all = [
+                i
+                for i in all_instances
+                if i["name"] == args.name or i.get("alias") == args.name
+            ]
+            if match_all:
+                status = match_all[0].get("status", "unknown")
+                raise VastlyError(
+                    f"'{args.name}' is {status}. Use 'vst start {args.name}' to start it."
+                )
+
+    selected = select_instance(running, args.name, allow_all=True)
 
     repo_info = _local_repo_info(config["gitRemote"])
 
@@ -172,6 +205,7 @@ def _cmd_connect(args) -> None:
         return
 
     repo_url, repo_name = repo_info
+
     remote_path = f"{config['workspace']}/{repo_name}"
 
     success_names = setup_instances(
@@ -198,8 +232,7 @@ def _cmd_list(args) -> None:
     git_root = _git_root()
     config = load_config(project_dir=git_root)
 
-    if not _check_prerequisites(ide=config["ide"]):
-        return
+    _check_prerequisites(ide=config["ide"])
 
     instances = get_synced_instances(config)
     show_table(instances)
@@ -225,20 +258,22 @@ def _cmd_name(args) -> None:
     git_root = _git_root()
     config = load_config(project_dir=git_root)
 
-    if not _check_prerequisites(ide=config["ide"]):
-        return
+    _check_prerequisites(ide=config["ide"])
 
-    instances = get_synced_instances(config)
+    instances = get_running_instances(config)
     aliases = load_aliases()
 
     validate_alias(args.alias, instances, aliases)
 
-    inst = _select_single_instance(instances, args.instance)
+    inst = select_instance(instances, args.instance)[0]
     inst_id = str(inst["id"])
 
-    # Remove any existing alias for this instance
+    # Remove any existing alias for this instance (and its SSH config)
     if inst_id in aliases:
         old_alias = aliases[inst_id]
+        old_config = SSH_CONFIG_DIR / old_alias
+        if old_config.exists():
+            old_config.unlink()
         del aliases[inst_id]
 
     aliases[inst_id] = args.alias
@@ -247,60 +282,73 @@ def _cmd_name(args) -> None:
 
 
 def _cmd_stop(args) -> None:
-    """Stop one or more running instances."""
-    if args.name and args.all:
-        raise VastlyError("Cannot specify both an instance name and --all")
-
+    """Stop one or more running or transitional instances."""
     git_root = _git_root()
     config = load_config(project_dir=git_root)
 
-    if not _check_prerequisites(ide=config["ide"]):
-        return
+    _check_prerequisites(ide=config["ide"])
 
     instances = get_synced_instances(config)
 
-    if args.all:
-        if not _confirm(f"Stop {len(instances)} instances?"):
-            return
-        for inst in instances:
-            _vastai_action("stop", inst)
-        return
+    # Give a specific error if named instance exists but is already stopped
+    if args.name:
+        match = [
+            i
+            for i in instances
+            if i["name"] == args.name or i.get("alias") == args.name
+        ]
+        if match and match[0].get("status") in ALREADY_STOPPED_STATES:
+            raise VastlyError(f"Already stopped ({match[0].get('status')}).")
 
-    inst = _select_single_instance(instances, args.name)
-    _vastai_action("stop", inst)
+    stoppable = [i for i in instances if i.get("status") in STOPPABLE_STATES]
+    if not stoppable:
+        raise VastlyError("No running instances to stop.")
+
+    if args.all:
+        selected = stoppable
+    else:
+        selected = select_instance(stoppable, args.name, allow_all=True)
+
+    if len(selected) > 1:
+        if not _confirm(f"Stop {len(selected)} instances?"):
+            return
+
+    for inst in selected:
+        _vastai_action("stop", inst)
 
 
 def _cmd_destroy(args) -> None:
     """Destroy one or more instances (irreversible)."""
-    if args.name and args.all:
-        raise VastlyError("Cannot specify both an instance name and --all")
-
     git_root = _git_root()
     config = load_config(project_dir=git_root)
 
-    if not _check_prerequisites(ide=config["ide"]):
-        return
+    _check_prerequisites(ide=config["ide"])
 
     instances = get_synced_instances(config)
 
     if args.all:
-        if not _confirm(f"Destroy {len(instances)} instances? This is irreversible."):
-            return
-        for inst in instances:
-            _vastai_destroy(inst, config)
-        return
+        selected = instances
+    else:
+        selected = select_instance(instances, args.name, allow_all=True)
 
-    inst = _select_single_instance(instances, args.name)
-    if not _confirm(f"Destroy {inst['name']}? This is irreversible."):
-        return
-    _vastai_destroy(inst, config)
+    if len(selected) == 1:
+        if not _confirm(f"Destroy {_display_name(selected[0])}? This is irreversible."):
+            return
+    else:
+        if not _confirm(f"Destroy {len(selected)} instances? This is irreversible."):
+            return
+
+    for inst in selected:
+        _vastai_destroy(inst)
 
 
 def _vastai_action(action: str, inst: dict) -> None:
     """Run 'vastai stop/destroy instance <id>' and print result."""
     inst_id = inst.get("id")
     if not inst_id:
-        raise VastlyError(f"Cannot {action} cached instance '{inst['name']}' (no instance ID)")
+        raise VastlyError(
+            f"Cannot {action} cached instance '{inst['name']}' (no instance ID)"
+        )
 
     result = subprocess.run(
         ["vastai", action, "instance", str(inst_id)],
@@ -311,14 +359,14 @@ def _vastai_action(action: str, inst: dict) -> None:
         msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise VastlyError(f"Failed to {action} {inst['name']}: {msg}")
 
-    action_past = "Stopped" if action == "stop" else "Destroyed"
+    action_past = {"stop": "Stopped", "destroy": "Destroyed", "start": "Started"}.get(
+        action, action.capitalize() + "ed"
+    )
     print(green(f"  {action_past} {inst['name']}"))
 
 
-def _vastai_destroy(inst: dict, config: dict) -> None:
+def _vastai_destroy(inst: dict) -> None:
     """Destroy an instance and clean up its SSH config and alias."""
-    from vastly.ssh import SSH_CONFIG_DIR
-
     _vastai_action("destroy", inst)
 
     # Clean up SSH config for the destroyed instance
@@ -347,20 +395,21 @@ def _cmd_cp(args) -> None:
 
     git_root = _git_root()
     if not git_root:
-        raise VastlyError("Not in a git repo. vst cp requires a git repo to resolve paths.")
+        raise VastlyError(
+            "Not in a git repo. vst cp requires a git repo to resolve paths."
+        )
 
     config = load_config(project_dir=git_root)
 
-    if not _check_prerequisites(ide=config["ide"]):
-        return
+    _check_prerequisites(ide=config["ide"])
 
     repo_info = _local_repo_info(config["gitRemote"])
     if not repo_info:
         raise VastlyError("Could not determine repo name from git remote.")
     _, repo_name = repo_info
 
-    instances = get_synced_instances(config)
-    inst = _select_single_instance(instances, args.instance)
+    instances = get_running_instances(config)
+    inst = select_instance(instances, args.instance)[0]
 
     remote_base = f"{config['workspace']}/{repo_name}"
     rel_path = args.path.rstrip("/\\")
@@ -399,75 +448,425 @@ def _cmd_cp(args) -> None:
         print(green(f"  Uploaded {rel_path}"))
 
 
+_START_TIMEOUT = 300  # 5 minutes
+_START_POLL_INTERVAL = 5
+
+
+def _poll_for_running(inst_id: str) -> None:
+    """Poll the Vast.ai API until instance is running, or raise on timeout."""
+    import time
+
+    deadline = time.monotonic() + _START_TIMEOUT
+    last_status = "unknown"
+
+    while time.monotonic() < deadline:
+        time.sleep(_START_POLL_INTERVAL)
+
+        result = subprocess.run(
+            ["vastai", "show", "instance", inst_id, "--raw"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            continue
+
+        try:
+            data = json.loads(result.stdout)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        cur_state = data.get("cur_state", "unknown")
+        if cur_state == "running":
+            print(green("  Instance is running."))
+            return
+
+        if cur_state != last_status:
+            last_status = cur_state
+            hint = (
+                " (Ctrl+C to cancel -- scheduling can take a while)"
+                if cur_state == "scheduling"
+                else ""
+            )
+            print(dim(f"  Waiting... ({cur_state}){hint}"))
+
+    raise VastlyError(
+        "Timed out waiting for instance to start. "
+        "Check the Vast.ai dashboard for status."
+    )
+
+
+def _cmd_start(args) -> None:
+    """Start a stopped/exited instance, wait for readiness, then connect."""
+    git_root = _git_root()
+    config = load_config(project_dir=git_root)
+
+    _check_prerequisites(ide=config["ide"])
+
+    instances = get_synced_instances(config)
+
+    # Filter to non-running instances for selection
+    non_running = [i for i in instances if i.get("status") != "running"]
+    if not non_running:
+        raise VastlyError(
+            "All instances are already running. Run 'vst' to connect."
+        )
+
+    inst = select_instance(non_running, args.name)[0]
+    status = inst.get("status", "unknown")
+
+    if status in STARTABLE_STATES:
+        _vastai_action("start", inst)
+    elif status in TRANSITIONAL_STATES:
+        print(dim(f"  Instance is {status}, waiting for it to be ready..."))
+    else:
+        raise VastlyError(f"Cannot start instance in '{status}' state.")
+
+    if args.no_connect:
+        return
+
+    _poll_for_running(str(inst["id"]))
+
+    # Auto-connect: triggers a fresh sync_instances which writes SSH configs
+    connect_args = argparse.Namespace(
+        command="connect",
+        name=inst.get("alias") or inst["name"],
+        no_setup=False,
+        force_setup=False,
+        verbose=getattr(args, "verbose", False),
+    )
+    _cmd_connect(connect_args)
+
+
+def _cmd_config(args) -> None:
+    """Show resolved configuration."""
+    from vastly.config import CONFIG_PATH, _PROJECT_KEYS
+
+    git_root = _git_root()
+    config = load_config(project_dir=git_root)
+
+    print(f"\nvastly v{__version__}\n")
+
+    keys = [
+        ("ide", "IDE to open (code or cursor)"),
+        ("sshKeyPath", "path to SSH private key"),
+        ("sshUser", "SSH user on instances"),
+        ("portForwards", "ports forwarded to localhost"),
+        ("workspace", "remote project directory"),
+        ("disableAutoTmux", "prevent auto-tmux on instances"),
+        ("gitRemote", "git remote for repo URL"),
+        ("postInstall", "commands to run after setup"),
+        ("installCommand", "override dependency install"),
+        ("copyFiles", "files to copy after setup"),
+    ]
+
+    def fmt(key: str, val) -> str:
+        if val is None:
+            return {"sshKeyPath": "(ssh-agent)", "installCommand": "(auto)"}.get(
+                key, "(none)"
+            )
+        if isinstance(val, bool):
+            return str(val).lower()
+        if isinstance(val, list):
+            if not val:
+                return "(none)"
+            if key == "portForwards":
+                return ", ".join(f"{pf['local']}:{pf['remote']}" for pf in val)
+            return json.dumps(val)
+        return str(val)
+
+    print(cyan("config:") + f" {CONFIG_PATH}")
+    key_w = max(len(k) for k, _ in keys)
+    rows = [(k, fmt(k, config.get(k)), desc) for k, desc in keys]
+    val_w = max(len(v) for _, v, _ in rows)
+    for key, val, desc in rows:
+        print(f"  {green(key.ljust(key_w))}  {val.ljust(val_w)}  {dim(desc)}")
+
+    # Project config overlay
+    if git_root:
+        project_cfg = git_root / ".vastly.json"
+        if project_cfg.exists():
+            print(f"\n{cyan('project config:')} {project_cfg}")
+            try:
+                project_raw = json.loads(project_cfg.read_text(encoding="utf-8"))
+                for key in project_raw:
+                    if key in _PROJECT_KEYS:
+                        val = fmt(key, project_raw[key])
+                        print(
+                            f"  {green(key.ljust(key_w))}  {val.ljust(val_w)}  {dim('(overrides global)')}"
+                        )
+            except (json.JSONDecodeError, OSError):
+                print(dim("  (invalid JSON)"))
+        else:
+            print(
+                f"\n{dim('project config: (none -- add .vastly.json to repo root to override per-project)')}"
+            )
+    else:
+        print(f"\n{dim('project config: (none -- not in a git repo)')}")
+
+    # Tips
+    print(f"\n{cyan('tips:')}")
+    tips = [
+        ("Edit ~/.vastly.json to customize", "'vastly' and 'vst' are the same command"),
+        ("Add .vastly.json to any repo", "vst -v for debug output"),
+        ("vst -f to re-run setup", "https://github.com/seamus-fallows/vastly"),
+    ]
+    for left, right in tips:
+        print(dim(f"  {left.ljust(36)}{right}"))
+    print()
+
+
 # ── Entry point ──────────────────────────────────────────────────────
+
+
+_CMD_HELP = {
+    "connect": {
+        "usage": "vst [name] [-n | -f]",
+        "desc": "Connect to an instance and open your IDE.",
+        "detail": "First visit: clones your repo, installs deps. Revisits: skips straight to IDE.",
+        "examples": [
+            ("vst", "auto-select and connect"),
+            ("vst train", "connect by alias"),
+            ("vst -f", "force re-run setup"),
+        ],
+    },
+    "list": {
+        "usage": "vst list",
+        "desc": "List all instances with status and cost.",
+        "detail": "Syncs with the Vast.ai API each time.",
+    },
+    "start": {
+        "usage": "vst start [name] [-n]",
+        "desc": "Start a stopped or exited instance.",
+        "detail": "Waits for the instance to be ready, then connects automatically.",
+        "examples": [
+            ("vst start", "start and connect"),
+            ("vst start train", "start by alias"),
+            ("vst start -n", "start without connecting"),
+        ],
+    },
+    "stop": {
+        "usage": "vst stop [name] [--all]",
+        "desc": "Stop a running instance.",
+        "examples": [
+            ("vst stop", "stop your instance"),
+            ("vst stop --all", "stop everything"),
+        ],
+    },
+    "destroy": {
+        "usage": "vst destroy [name] [--all]",
+        "desc": "Destroy an instance (irreversible).",
+        "detail": "Also removes its SSH config and any alias.",
+        "examples": [
+            ("vst destroy", "destroy your instance"),
+            ("vst destroy --all", "destroy everything"),
+        ],
+    },
+    "cp": {
+        "usage": "vst cp <up|down> <path> [-i instance]",
+        "desc": "Copy files to/from a remote instance.",
+        "detail": "Paths are relative to the git repo root.",
+        "examples": [
+            ("vst cp up .env", "upload a file"),
+            ("vst cp down results/", "download a directory"),
+        ],
+    },
+    "name": {
+        "usage": "vst name <alias> [-i instance] [--clear]",
+        "desc": "Assign a custom name to an instance.",
+        "detail": "Aliases work everywhere instance names do.",
+        "examples": [
+            ("vst name train", "name your instance"),
+            ("vst train", "then use it anywhere"),
+            ("vst name train --clear", "remove the alias"),
+        ],
+    },
+    "config": {
+        "usage": "vst config",
+        "desc": "Show current configuration.",
+    },
+}
+
+
+def _print_section(header: str, items: list[tuple[str, str]]) -> None:
+    """Print a colored section with aligned items."""
+    width = max(len(k) for k, _ in items)
+    print(cyan(f"{header}:"))
+    for key, desc in items:
+        print(f"  {green(key.ljust(width))}  {desc}")
+
+
+def _print_help() -> None:
+    """Print top-level help and exit."""
+    commands = [
+        ("list", "list all instances"),
+        ("start", "start a stopped instance"),
+        ("stop", "stop an instance"),
+        ("destroy", "destroy an instance"),
+        ("cp", "copy files to/from an instance"),
+        ("name", "name an instance"),
+        ("config", "show current configuration"),
+    ]
+    options = [
+        ("-f, --force-setup", "re-run remote setup"),
+        ("-n, --no-setup", "skip setup (just open IDE)"),
+        ("-v, --verbose", "verbose output"),
+        ("-h, --help", "show help"),
+        ("--version", "show version"),
+    ]
+    print(f"\n{cyan('usage:')} vst [name] [-f | -n]\n")
+    print("Connect to a Vast.ai instance and open your IDE.")
+    print(dim("Run with no arguments to auto-select, or pass a name.\n"))
+    _print_section("commands", commands)
+    print()
+    _print_section("options", options)
+    hint = "Run 'vst <command> -h' for details on a specific command."
+    print(f"\n{dim(hint)}")
+    print(dim("docs: https://github.com/seamus-fallows/vastly") + "\n")
+    sys.exit(0)
+
+
+def _print_cmd_help(cmd: str, parsers: dict) -> None:
+    """Print help for a subcommand and exit."""
+    info = _CMD_HELP[cmd]
+    print(f"\n{cyan('usage:')} {info['usage']}\n")
+    print(f"{info['desc']}")
+    if info.get("detail"):
+        print(dim(info["detail"]))
+    print()
+
+    # Derive arguments and options from the argparse parser
+    pos_args: list[tuple[str, str]] = []
+    opts: list[tuple[str, str]] = []
+    for action in parsers[cmd]._actions:
+        if action.dest in ("help", "verbose") or not action.help:
+            continue
+        if action.option_strings:
+            opts.append((", ".join(action.option_strings), action.help))
+        else:
+            name = "|".join(action.choices) if action.choices else action.dest
+            pos_args.append((name, action.help))
+
+    if pos_args:
+        _print_section("arguments", pos_args)
+        print()
+    if opts:
+        _print_section("options", opts)
+        print()
+    if info.get("examples"):
+        width = max(len(ex) for ex, _ in info["examples"])
+        print(cyan("examples:"))
+        for ex, desc in info["examples"]:
+            print(f"  {green(ex.ljust(width))}  {dim(desc)}")
+        print()
+    sys.exit(0)
+
+
+def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
+    """Build and return (parser, {cmd_name: subparser})."""
+    hint = "auto-selects if only one, prompts if multiple"
+
+    parser = argparse.ArgumentParser(prog="vst", add_help=False)
+    parser.add_argument("--version", action="version", version=f"vastly {__version__}")
+    parser.add_argument("-v", "--verbose", action="store_true")
+    g_top = parser.add_mutually_exclusive_group()
+    g_top.add_argument("-n", "--no-setup", action="store_true")
+    g_top.add_argument("-f", "--force-setup", action="store_true")
+
+    subparsers = parser.add_subparsers(dest="command")
+    parsers: dict[str, argparse.ArgumentParser] = {}
+
+    # Connect (default when no subcommand given)
+    p = subparsers.add_parser("connect", help="connect to an instance and open IDE")
+    p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
+    p.add_argument("-v", "--verbose", action="store_true")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument(
+        "-n",
+        "--no-setup",
+        action="store_true",
+        help="skip remote setup (just open IDE)",
+    )
+    g.add_argument(
+        "-f",
+        "--force-setup",
+        action="store_true",
+        help="re-run setup even if already done",
+    )
+    parsers["connect"] = p
+
+    # List
+    p = subparsers.add_parser("list", help="list running instances")
+    p.add_argument("-v", "--verbose", action="store_true")
+    parsers["list"] = p
+
+    # Stop
+    p = subparsers.add_parser("stop", help="stop a running instance")
+    p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
+    p.add_argument("--all", action="store_true", help="stop all running instances")
+    p.add_argument("-v", "--verbose", action="store_true")
+    parsers["stop"] = p
+
+    # Destroy
+    p = subparsers.add_parser("destroy", help="destroy an instance (irreversible)")
+    p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
+    p.add_argument("--all", action="store_true", help="destroy all instances")
+    p.add_argument("-v", "--verbose", action="store_true")
+    parsers["destroy"] = p
+
+    # Cp
+    p = subparsers.add_parser("cp", help="copy files to/from a remote instance")
+    p.add_argument("direction", choices=["up", "down"], help="upload or download")
+    p.add_argument("path", help="file or directory (append / for directories)")
+    p.add_argument("-i", "--instance", help=f"target instance ({hint})")
+    p.add_argument("-v", "--verbose", action="store_true")
+    parsers["cp"] = p
+
+    # Start
+    p = subparsers.add_parser("start", help="start a stopped instance")
+    p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
+    p.add_argument(
+        "-n", "--no-connect", action="store_true", help="start without connecting"
+    )
+    p.add_argument("-v", "--verbose", action="store_true")
+    parsers["start"] = p
+
+    # Name
+    p = subparsers.add_parser("name", help="assign a custom name to an instance")
+    p.add_argument("alias", help="name to assign")
+    p.add_argument("-i", "--instance", help=f"instance to name ({hint})")
+    p.add_argument("--clear", action="store_true", help="remove the alias")
+    p.add_argument("-v", "--verbose", action="store_true")
+    parsers["name"] = p
+
+    # Config
+    p = subparsers.add_parser("config", help="show current configuration")
+    p.add_argument("-v", "--verbose", action="store_true")
+    parsers["config"] = p
+
+    return parser, parsers
 
 
 def main() -> None:
     """Parse arguments and dispatch to the appropriate subcommand."""
-    parser = argparse.ArgumentParser(
-        prog="vst",
-        description="Connect to Vast.ai instances: sync SSH, set up your project, and open your IDE.",
-        epilog=(
-            "commands: connect, list, stop, destroy, name, cp\n"
-            "run vst <command> --help for details\n\n"
-            "alias:         `vastly` and `vst` are the same command\n"
-            "prerequisites: vastai CLI (pip install vastai), git, ssh, VS Code or Cursor\n"
-            "config:        ~/.vastly.json (created on first run)\n"
-            "docs:          https://github.com/seamus-fallows/vastly"
-        ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("--version", action="version", version=f"vastly {__version__}")
+    parser, parsers = _build_parser()
 
-    subparsers = parser.add_subparsers(dest="command")
+    # Handle help ourselves for clean, colored output
+    if {"-h", "--help"} & set(sys.argv[1:]):
+        rest = [a for a in sys.argv[1:] if a not in ("-h", "--help")]
+        cmd = rest[0] if rest and not rest[0].startswith("-") else None
+        if cmd in _CMD_HELP:
+            _print_cmd_help(cmd, parsers)
+        else:
+            _print_help()
 
-    # Connect (default when no subcommand given)
-    connect_parser = subparsers.add_parser("connect", help="connect to an instance and open IDE")
-    connect_parser.add_argument("name", nargs="?", help="instance name")
-    connect_parser.add_argument("-v", "--verbose", action="store_true")
-    setup_group = connect_parser.add_mutually_exclusive_group()
-    setup_group.add_argument(
-        "-n", "--no-setup", action="store_true",
-        help="open IDE without cloning or installing",
-    )
-    setup_group.add_argument(
-        "-f", "--force-setup", action="store_true",
-        help="re-run remote setup even if already done",
-    )
-
-    # List
-    list_parser = subparsers.add_parser("list", help="list running instances")
-    list_parser.add_argument("-v", "--verbose", action="store_true")
-
-    # Stop
-    stop_parser = subparsers.add_parser("stop", help="stop a running instance")
-    stop_parser.add_argument("name", nargs="?", help="instance name")
-    stop_parser.add_argument("--all", action="store_true", help="stop all running instances")
-    stop_parser.add_argument("-v", "--verbose", action="store_true")
-
-    # Destroy
-    destroy_parser = subparsers.add_parser("destroy", help="destroy an instance (irreversible)")
-    destroy_parser.add_argument("name", nargs="?", help="instance name")
-    destroy_parser.add_argument("--all", action="store_true", help="destroy all instances")
-    destroy_parser.add_argument("-v", "--verbose", action="store_true")
-
-    # Cp
-    cp_parser = subparsers.add_parser("cp", help="copy files to/from a remote instance")
-    cp_parser.add_argument("direction", choices=["up", "down"])
-    cp_parser.add_argument("path", help="relative file path")
-    cp_parser.add_argument(
-        "-i", "--instance", help="instance name (default: auto-select or picker)",
-    )
-    cp_parser.add_argument("-v", "--verbose", action="store_true")
-
-    # Name
-    name_parser = subparsers.add_parser("name", help="assign a custom name to an instance")
-    name_parser.add_argument("alias", help="custom name to assign")
-    name_parser.add_argument(
-        "-i", "--instance", help="instance to name (default: auto-select or picker)",
-    )
-    name_parser.add_argument("--clear", action="store_true", help="remove the alias")
-    name_parser.add_argument("-v", "--verbose", action="store_true")
+    # Treat unknown subcommands as instance names for connect.
+    # e.g. `vst my-gpu` becomes `vst connect my-gpu`
+    # e.g. `vst -v my-gpu` becomes `vst -v connect my-gpu`
+    known = set(parsers.keys())
+    non_flags = [a for a in sys.argv[1:] if not a.startswith("-")]
+    if non_flags and non_flags[0] not in known:
+        idx = sys.argv.index(non_flags[0])
+        sys.argv.insert(idx, "connect")
 
     args = parser.parse_args()
 
@@ -475,11 +874,16 @@ def main() -> None:
     if args.command is None:
         args.command = "connect"
         args.name = None
-        args.no_setup = False
-        args.force_setup = False
-        args.verbose = False
 
-    if hasattr(args, "verbose") and args.verbose:
+    # Subparser defaults can override the main parser's flags, so check argv directly
+    if "-v" in sys.argv[1:] or "--verbose" in sys.argv[1:]:
+        args.verbose = True
+    if "-f" in sys.argv[1:] or "--force-setup" in sys.argv[1:]:
+        args.force_setup = True
+    if "-n" in sys.argv[1:] or "--no-setup" in sys.argv[1:]:
+        args.no_setup = True
+
+    if args.verbose:
         vastly.VERBOSE = True
 
     try:
@@ -487,6 +891,8 @@ def main() -> None:
             _cmd_connect(args)
         elif args.command == "list":
             _cmd_list(args)
+        elif args.command == "start":
+            _cmd_start(args)
         elif args.command == "stop":
             _cmd_stop(args)
         elif args.command == "destroy":
@@ -495,6 +901,8 @@ def main() -> None:
             _cmd_name(args)
         elif args.command == "cp":
             _cmd_cp(args)
+        elif args.command == "config":
+            _cmd_config(args)
     except KeyboardInterrupt:
         print(file=sys.stderr)  # clean up partial line
         sys.exit(130)  # standard exit code for SIGINT
