@@ -8,9 +8,28 @@ import shutil
 import sys
 from importlib import resources
 from pathlib import Path
+from typing import Any, TypedDict
 
 import vastly
 from vastly.errors import ConfigError
+
+
+class PortForward(TypedDict):
+    local: int
+    remote: int
+
+
+class Config(TypedDict):
+    ide: str
+    sshKeyPath: str | None
+    sshUser: str
+    portForwards: list[PortForward]
+    workspace: str
+    disableAutoTmux: bool
+    gitRemote: str
+    postInstall: list[str]
+    installCommand: str | None
+    copyFiles: list[str]
 
 CONFIG_PATH = Path.home() / ".vastly.json"
 
@@ -84,7 +103,7 @@ def _detect_ide() -> str:
 _KNOWN_KEYS = set(DEFAULTS)
 
 
-def _validate_config(config: dict) -> None:
+def _validate_config(config: Config) -> None:
     """Validate types and basic shapes of a resolved config dict.
 
     Raises ConfigError with a clear message on the first problem found.
@@ -152,36 +171,23 @@ def _validate_config(config: dict) -> None:
                     f"got {actual}"
                 )
 
-    # postInstall: list of strings
-    pi = config.get("postInstall")
-    if not isinstance(pi, list):
-        raise ConfigError(
-            f"Invalid config: 'postInstall' must be a list of strings, "
-            f"got {type(pi).__name__}"
-        )
-    for i, entry in enumerate(pi):
-        if not isinstance(entry, str):
+    # postInstall, copyFiles: list of strings
+    for key in ("postInstall", "copyFiles"):
+        val = config.get(key)
+        if not isinstance(val, list):
             raise ConfigError(
-                f"Invalid config: 'postInstall[{i}]' must be a string, "
-                f"got {type(entry).__name__}"
+                f"Invalid config: '{key}' must be a list of strings, "
+                f"got {type(val).__name__}"
             )
-
-    # copyFiles: list of strings
-    cf = config.get("copyFiles")
-    if not isinstance(cf, list):
-        raise ConfigError(
-            f"Invalid config: 'copyFiles' must be a list of strings, "
-            f"got {type(cf).__name__}"
-        )
-    for i, entry in enumerate(cf):
-        if not isinstance(entry, str):
-            raise ConfigError(
-                f"Invalid config: 'copyFiles[{i}]' must be a string, "
-                f"got {type(entry).__name__}"
-            )
+        for i, entry in enumerate(val):
+            if not isinstance(entry, str):
+                raise ConfigError(
+                    f"Invalid config: '{key}[{i}]' must be a string, "
+                    f"got {type(entry).__name__}"
+                )
 
 
-def _warn_unknown_keys(raw: dict, source: str) -> None:
+def _warn_unknown_keys(raw: dict[str, Any], source: str) -> None:
     """Print a warning to stderr for any unrecognized top-level keys."""
     unknown = set(raw) - _KNOWN_KEYS
     if unknown:
@@ -189,7 +195,7 @@ def _warn_unknown_keys(raw: dict, source: str) -> None:
         print(f"Warning: unrecognized config keys in {source}: {keys}", file=sys.stderr)
 
 
-def load_config(path: Path | None = None, *, project_dir: Path | None = None) -> dict:
+def load_config(path: Path | None = None, *, project_dir: Path | None = None) -> Config:
     """Load config from disk, creating from template if missing.
 
     If ``project_dir`` is given and contains a ``.vastly.json``, project-specific
@@ -231,6 +237,7 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
     # Auto-detect IDE from terminal environment (overrides config when inside an IDE).
     env_ide = _ide_from_env()
     if env_ide:
+        vastly.verbose(f"IDE detected from environment: {env_ide}")
         config["ide"] = env_ide
 
     if isinstance(config["postInstall"], str):
@@ -259,6 +266,8 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
 
             if isinstance(config["postInstall"], str):
                 config["postInstall"] = [config["postInstall"]]
+
+            vastly.verbose(f"Project config overlaid from {project_cfg}")
 
     _validate_config(config)
     vastly.verbose(f"Config loaded from {path}")

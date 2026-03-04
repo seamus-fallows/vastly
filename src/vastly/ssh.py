@@ -20,7 +20,12 @@ def _atomic_write(path: Path, content: str) -> None:
     """Write content to path atomically via temp-file-then-rename."""
     tmp = path.parent / (path.name + ".vastly-tmp")
     tmp.write_text(content, encoding="utf-8")
-    tmp.replace(path)  # atomic on POSIX; best-effort on Windows
+    try:
+        tmp.replace(path)
+    except OSError:
+        # Windows: replace() fails if target is open; fall back to delete+rename
+        path.unlink(missing_ok=True)
+        tmp.rename(path)
 
 
 # Quick probes (echo ok, test -f, find): fail fast on dead connections
@@ -136,7 +141,7 @@ def cached_config_names() -> list[str]:
 
 def run_ssh(
     host: str, command: str, *, setup: bool = False, stream: bool = False
-) -> subprocess.CompletedProcess:
+) -> subprocess.CompletedProcess[str]:
     """Run an SSH command on *host*.
 
     Args:
@@ -166,7 +171,7 @@ def run_ssh(
 
 def run_scp(
     src: str, dest: str, *, setup: bool = False, recursive: bool = False
-) -> subprocess.CompletedProcess:
+) -> subprocess.CompletedProcess[str]:
     """SCP a file from *src* to *dest*."""
     opts = list(SSH_SETUP_OPTS if setup else SSH_OPTS)
     if vastly.VERBOSE:

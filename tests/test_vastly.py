@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import shutil
@@ -15,9 +16,10 @@ from pathlib import Path
 import pytest
 
 from vastly import __version__, cyan, dim, green, red, yellow
-from vastly.config import _detect_ide, _ide_from_env, _validate_config, load_config
+from vastly.config import DEFAULTS, _detect_ide, _ide_from_env, _validate_config, load_config
 from vastly.errors import ConfigError, VastlyError
 from vastly.instance import (
+    Instance,
     build_instance_name,
     format_uptime,
     get_running_instances,
@@ -40,6 +42,23 @@ from vastly.ssh import (
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "vastly"
 DATA = SRC / "data"
+
+
+def _config(**kwargs) -> dict:
+    """Create a complete config dict with sensible defaults for testing."""
+    base = {k: v for k, v in DEFAULTS.items()}
+    base.update(kwargs)
+    return base
+
+
+def _inst(name: str = "test", id: int = 1, **kwargs) -> Instance:
+    """Create an Instance with sensible defaults for testing."""
+    defaults = dict(
+        name=name, id=id, dph_total=0.0, gpu_name="", num_gpus=1,
+        start_date=None, cached=False, status="running", alias=None,
+    )
+    defaults.update(kwargs)
+    return Instance(**defaults)
 
 
 class TestFormatUptime:
@@ -379,19 +398,7 @@ class TestConfigValidation:
 
     def test_valid_config_passes(self):
         """A well-formed config dict should not raise."""
-        config = {
-            "ide": "code",
-            "sshUser": "root",
-            "sshKeyPath": None,
-            "workspace": "/workspace",
-            "disableAutoTmux": False,
-            "gitRemote": "origin",
-            "portForwards": [{"local": 8080, "remote": 8080}],
-            "postInstall": [],
-            "installCommand": None,
-            "copyFiles": [],
-        }
-        _validate_config(config)  # should not raise
+        _validate_config(_config())  # should not raise
 
     def test_wrong_type_for_port_forwards_raises(self, tmp_path):
         """portForwards set to an int should raise ConfigError."""
@@ -469,60 +476,60 @@ class TestPortHelpers:
 class TestSelectInstance:
     def test_returns_matching_by_name(self):
         instances = [
-            {"name": "1xRTX3060-TW", "id": 100},
-            {"name": "2xA100-US", "id": 200},
+            _inst(name="1xRTX3060-TW", id=100),
+            _inst(name="2xA100-US", id=200),
         ]
         result = select_instance(instances, "2xA100-US")
         assert len(result) == 1
-        assert result[0]["name"] == "2xA100-US"
+        assert result[0].name == "2xA100-US"
 
     def test_raises_for_bad_name(self):
         instances = [
-            {"name": "1xRTX3060-TW", "id": 100},
-            {"name": "2xA100-US", "id": 200},
+            _inst(name="1xRTX3060-TW", id=100),
+            _inst(name="2xA100-US", id=200),
         ]
         with pytest.raises(VastlyError, match="No instance named 'NOPE'"):
             select_instance(instances, "NOPE")
 
     def test_auto_selects_single_instance(self):
-        instances = [{"name": "1xRTX3060-TW", "id": 100}]
+        instances = [_inst(name="1xRTX3060-TW", id=100)]
         result = select_instance(instances)
         assert len(result) == 1
-        assert result[0]["name"] == "1xRTX3060-TW"
+        assert result[0].name == "1xRTX3060-TW"
 
     def test_select_all_returns_all_instances(self, monkeypatch):
         instances = [
-            {"name": "1xRTX3060-TW", "id": 100},
-            {"name": "2xA100-US", "id": 200},
+            _inst(name="1xRTX3060-TW", id=100),
+            _inst(name="2xA100-US", id=200),
         ]
         monkeypatch.setattr("builtins.input", lambda _: "a")
         result = select_instance(instances, allow_all=True)
         assert len(result) == 2
-        assert result[0]["name"] == "1xRTX3060-TW"
-        assert result[1]["name"] == "2xA100-US"
+        assert result[0].name == "1xRTX3060-TW"
+        assert result[1].name == "2xA100-US"
 
     def test_all_without_allow_all_raises(self, monkeypatch):
         """Typing 'a' without allow_all should raise, not return all."""
-        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        instances = [_inst(name="a", id=1), _inst(name="b", id=2)]
         monkeypatch.setattr("builtins.input", lambda _: "a")
         with pytest.raises(VastlyError, match="No instance selected"):
             select_instance(instances)
 
     def test_select_by_number(self, monkeypatch):
         instances = [
-            {"name": "1xRTX3060-TW", "id": 100},
-            {"name": "2xA100-US", "id": 200},
+            _inst(name="1xRTX3060-TW", id=100),
+            _inst(name="2xA100-US", id=200),
         ]
         monkeypatch.setattr("builtins.input", lambda _: "2")
         result = select_instance(instances)
         assert len(result) == 1
-        assert result[0]["name"] == "2xA100-US"
+        assert result[0].name == "2xA100-US"
 
     def test_eof_raises(self, monkeypatch):
         def raise_eof(_):
             raise EOFError
 
-        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        instances = [_inst(name="a", id=1), _inst(name="b", id=2)]
         monkeypatch.setattr("builtins.input", raise_eof)
         with pytest.raises(VastlyError, match="No instance selected"):
             select_instance(instances)
@@ -531,25 +538,25 @@ class TestSelectInstance:
         def raise_ki(_):
             raise KeyboardInterrupt
 
-        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        instances = [_inst(name="a", id=1), _inst(name="b", id=2)]
         monkeypatch.setattr("builtins.input", raise_ki)
         with pytest.raises(VastlyError, match="No instance selected"):
             select_instance(instances)
 
     def test_out_of_range_raises(self, monkeypatch):
-        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        instances = [_inst(name="a", id=1), _inst(name="b", id=2)]
         monkeypatch.setattr("builtins.input", lambda _: "5")
         with pytest.raises(VastlyError, match="No instance selected"):
             select_instance(instances)
 
     def test_zero_raises(self, monkeypatch):
-        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        instances = [_inst(name="a", id=1), _inst(name="b", id=2)]
         monkeypatch.setattr("builtins.input", lambda _: "0")
         with pytest.raises(VastlyError, match="No instance selected"):
             select_instance(instances)
 
     def test_non_digit_raises(self, monkeypatch):
-        instances = [{"name": "a", "id": 1}, {"name": "b", "id": 2}]
+        instances = [_inst(name="a", id=1), _inst(name="b", id=2)]
         monkeypatch.setattr("builtins.input", lambda _: "xyz")
         with pytest.raises(VastlyError, match="No instance selected"):
             select_instance(instances)
@@ -641,12 +648,10 @@ class TestLocalRepoInfo:
         """HTTPS URLs should pass through as-is, not be converted to SSH."""
         https_url = "https://github.com/user/repo.git"
         monkeypatch.setattr(
-            "vastly.cli.subprocess.run",
-            lambda *a, **kw: type(
-                "R", (), {"returncode": 0, "stdout": https_url, "stderr": ""}
-            )(),
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout=https_url, stderr=""),
         )
-        from vastly.cli import _local_repo_info
+        from vastly.commands import _local_repo_info
 
         result = _local_repo_info("origin")
         assert result is not None
@@ -657,12 +662,10 @@ class TestLocalRepoInfo:
     def test_ssh_url_passes_through(self, monkeypatch):
         ssh_url = "git@github.com:user/repo.git"
         monkeypatch.setattr(
-            "vastly.cli.subprocess.run",
-            lambda *a, **kw: type(
-                "R", (), {"returncode": 0, "stdout": ssh_url, "stderr": ""}
-            )(),
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout=ssh_url, stderr=""),
         )
-        from vastly.cli import _local_repo_info
+        from vastly.commands import _local_repo_info
 
         result = _local_repo_info("origin")
         assert result is not None
@@ -673,12 +676,10 @@ class TestLocalRepoInfo:
     def test_https_url_without_dotgit_suffix(self, monkeypatch):
         https_url = "https://github.com/user/my-project"
         monkeypatch.setattr(
-            "vastly.cli.subprocess.run",
-            lambda *a, **kw: type(
-                "R", (), {"returncode": 0, "stdout": https_url, "stderr": ""}
-            )(),
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout=https_url, stderr=""),
         )
-        from vastly.cli import _local_repo_info
+        from vastly.commands import _local_repo_info
 
         result = _local_repo_info("origin")
         assert result is not None
@@ -924,7 +925,7 @@ class TestRunScp:
 
         def fake_run(cmd, **kwargs):
             captured_cmd.extend(cmd)
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.ssh.subprocess.run", fake_run)
         from vastly.ssh import run_scp
@@ -938,7 +939,7 @@ class TestRunScp:
 
         def fake_run(cmd, **kwargs):
             captured_cmd.extend(cmd)
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.ssh.subprocess.run", fake_run)
         from vastly.ssh import run_scp
@@ -987,21 +988,14 @@ class TestSetupMarker:
         def fake_ssh(name, cmd, **kwargs):
             ssh_calls.append(cmd)
             if "cat ~/.vastly/setup/" in cmd:
-                return type(
-                    "R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""}
-                )()
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
 
-        instances = [{"name": "1xA100-US"}]
-        config = {
-            "installCommand": None,
-            "disableAutoTmux": False,
-            "workspace": "/workspace",
-            "postInstall": [],
-        }
+        instances = [_inst(name="1xA100-US")]
+        config = _config()
 
         result = setup_instances(instances, repo_url, "app", config)
 
@@ -1022,21 +1016,14 @@ class TestSetupMarker:
         def fake_ssh(name, cmd, **kwargs):
             ssh_calls.append(cmd)
             if "cat ~/.vastly/setup/" in cmd:
-                return type(
-                    "R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""}
-                )()
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
 
-        instances = [{"name": "1xA100-US"}]
-        config = {
-            "installCommand": None,
-            "disableAutoTmux": False,
-            "workspace": "/workspace",
-            "postInstall": [],
-        }
+        instances = [_inst(name="1xA100-US")]
+        config = _config()
 
         result = setup_instances(instances, new_url, "app", config)
 
@@ -1052,33 +1039,24 @@ class TestSetupMarker:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return type(
-                    "R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""}
-                )()
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         scp_calls = []
 
         def fake_scp(*args, **kwargs):
             scp_calls.append(args)
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
         monkeypatch.setattr(
             "vastly.remote.subprocess.run",
-            lambda *a, **kw: type(
-                "R", (), {"returncode": 0, "stdout": "Test User\n", "stderr": ""}
-            )(),
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="Test User\n", stderr=""),
         )
 
-        instances = [{"name": "1xA100-US"}]
-        config = {
-            "installCommand": None,
-            "disableAutoTmux": False,
-            "workspace": "/workspace",
-            "postInstall": [],
-        }
+        instances = [_inst(name="1xA100-US")]
+        config = _config()
 
         result = setup_instances(
             instances, "git@github.com:user/app.git", "app", config
@@ -1129,22 +1107,15 @@ class TestRepoMismatchWarning:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return type(
-                    "R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""}
-                )()
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
         monkeypatch.setattr("builtins.input", lambda _: "n")
 
-        instances = [{"name": "1xA100-US"}]
-        config = {
-            "installCommand": None,
-            "disableAutoTmux": False,
-            "workspace": "/workspace",
-            "postInstall": [],
-        }
+        instances = [_inst(name="1xA100-US")]
+        config = _config()
 
         result = setup_instances(
             instances, "git@github.com:user/data-prep.git", "data-prep", config
@@ -1160,34 +1131,25 @@ class TestRepoMismatchWarning:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return type(
-                    "R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""}
-                )()
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         scp_calls = []
 
         def fake_scp(*args, **kwargs):
             scp_calls.append(args)
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
         monkeypatch.setattr("builtins.input", lambda _: "y")
         monkeypatch.setattr(
             "vastly.remote.subprocess.run",
-            lambda *a, **kw: type(
-                "R", (), {"returncode": 0, "stdout": "Test User\n", "stderr": ""}
-            )(),
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="Test User\n", stderr=""),
         )
 
-        instances = [{"name": "1xA100-US"}]
-        config = {
-            "installCommand": None,
-            "disableAutoTmux": False,
-            "workspace": "/workspace",
-            "postInstall": [],
-        }
+        instances = [_inst(name="1xA100-US")]
+        config = _config()
 
         result = setup_instances(
             instances, "git@github.com:user/data-prep.git", "data-prep", config
@@ -1205,16 +1167,14 @@ class TestRepoMismatchWarning:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return type(
-                    "R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""}
-                )()
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         scp_calls = []
 
         def fake_scp(*args, **kwargs):
             scp_calls.append(args)
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
@@ -1225,18 +1185,11 @@ class TestRepoMismatchWarning:
         )
         monkeypatch.setattr(
             "vastly.remote.subprocess.run",
-            lambda *a, **kw: type(
-                "R", (), {"returncode": 0, "stdout": "Test User\n", "stderr": ""}
-            )(),
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="Test User\n", stderr=""),
         )
 
-        instances = [{"name": "1xA100-US"}]
-        config = {
-            "installCommand": None,
-            "disableAutoTmux": False,
-            "workspace": "/workspace",
-            "postInstall": [],
-        }
+        instances = [_inst(name="1xA100-US")]
+        config = _config()
 
         result = setup_instances(
             instances, "git@github.com:user/app.git", "app", config
@@ -1253,10 +1206,8 @@ class TestRepoMismatchWarning:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return type(
-                    "R", (), {"returncode": 0, "stdout": probe_output, "stderr": ""}
-                )()
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         def raise_eof(_):
             raise EOFError
@@ -1265,13 +1216,8 @@ class TestRepoMismatchWarning:
         monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
         monkeypatch.setattr("builtins.input", raise_eof)
 
-        instances = [{"name": "1xA100-US"}]
-        config = {
-            "installCommand": None,
-            "disableAutoTmux": False,
-            "workspace": "/workspace",
-            "postInstall": [],
-        }
+        instances = [_inst(name="1xA100-US")]
+        config = _config()
 
         result = setup_instances(
             instances, "git@github.com:user/app.git", "app", config
@@ -1350,20 +1296,20 @@ class TestUpdateCheck:
 
 
 class TestStopDestroy:
-    """Test _cmd_stop, _cmd_destroy, and _vastai_action."""
+    """Test cmd_stop, cmd_destroy, and _vastai_action."""
 
     def test_vastai_action_stop(self, monkeypatch):
-        from vastly.cli import _vastai_action
+        from vastly.commands import _vastai_action
 
         captured_cmd = []
 
         def fake_run(cmd, **kwargs):
             captured_cmd.extend(cmd)
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
-        monkeypatch.setattr("vastly.cli.subprocess.run", fake_run)
+        monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
 
-        inst = {"name": "1xRTX4090-TW", "id": 12345}
+        inst = _inst(name="1xRTX4090-TW", id=12345)
         _vastai_action("stop", inst)
 
         assert "vastai" in captured_cmd
@@ -1371,40 +1317,38 @@ class TestStopDestroy:
         assert "12345" in captured_cmd
 
     def test_vastai_action_raises_on_failure(self, monkeypatch):
-        from vastly.cli import _vastai_action
+        from vastly.commands import _vastai_action
 
         monkeypatch.setattr(
-            "vastly.cli.subprocess.run",
-            lambda *a, **kw: type(
-                "R", (), {"returncode": 1, "stdout": "", "stderr": "error msg"}
-            )(),
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 1, stdout="", stderr="error msg"),
         )
 
-        inst = {"name": "test", "id": 1}
+        inst = _inst(name="test", id=1)
         with pytest.raises(VastlyError, match="Failed to stop"):
             _vastai_action("stop", inst)
 
     def test_vastai_action_raises_on_cached_instance(self):
-        from vastly.cli import _vastai_action
+        from vastly.commands import _vastai_action
 
-        inst = {"name": "test", "id": None}
+        inst = _inst(name="test", id=None)
         with pytest.raises(VastlyError, match="Cannot stop cached instance"):
             _vastai_action("stop", inst)
 
     def test_confirm_yes(self, monkeypatch):
-        from vastly.cli import _confirm
+        from vastly.commands import _confirm
 
         monkeypatch.setattr("builtins.input", lambda _: "y")
         assert _confirm("Do it?") is True
 
     def test_confirm_no(self, monkeypatch):
-        from vastly.cli import _confirm
+        from vastly.commands import _confirm
 
         monkeypatch.setattr("builtins.input", lambda _: "n")
         assert _confirm("Do it?") is False
 
     def test_confirm_default_no(self, monkeypatch):
-        from vastly.cli import _confirm
+        from vastly.commands import _confirm
 
         monkeypatch.setattr("builtins.input", lambda _: "")
         assert _confirm("Do it?") is False
@@ -1431,7 +1375,7 @@ class TestAliases:
         assert load_aliases() == {}
 
     def test_validate_alias_valid(self):
-        instances = [{"name": "1xRTX4090-TW", "id": 100}]
+        instances = [_inst(name="1xRTX4090-TW", id=100)]
         aliases = {}
         validate_alias("train", instances, aliases)  # should not raise
 
@@ -1460,7 +1404,7 @@ class TestAliases:
             validate_alias("config", [], {})
 
     def test_validate_alias_rejects_auto_name_collision(self):
-        instances = [{"name": "train", "id": 100}]
+        instances = [_inst(name="train", id=100)]
         with pytest.raises(VastlyError, match="conflicts"):
             validate_alias("train", instances, {})
 
@@ -1471,102 +1415,82 @@ class TestAliases:
 
     def test_select_instance_matches_alias(self):
         instances = [
-            {"name": "1xRTX4090-TW", "id": 100, "alias": "train"},
-            {"name": "2xA100-US", "id": 200, "alias": None},
+            _inst(name="1xRTX4090-TW", id=100, alias="train"),
+            _inst(name="2xA100-US", id=200),
         ]
         result = select_instance(instances, "train")
         assert len(result) == 1
-        assert result[0]["name"] == "1xRTX4090-TW"
+        assert result[0].name == "1xRTX4090-TW"
 
     def test_select_instance_matches_auto_name_with_alias(self):
         instances = [
-            {"name": "1xRTX4090-TW", "id": 100, "alias": "train"},
+            _inst(name="1xRTX4090-TW", id=100, alias="train"),
         ]
         result = select_instance(instances, "1xRTX4090-TW")
         assert len(result) == 1
-        assert result[0]["alias"] == "train"
+        assert result[0].alias == "train"
 
 
 class TestCp:
-    """Test _cmd_cp path resolution and SCP invocation."""
+    """Test cmd_cp path resolution and SCP invocation."""
 
     def test_cp_raises_outside_git_repo(self, monkeypatch):
-        from vastly.cli import _cmd_cp
+        from vastly.commands import cmd_cp
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         args = type(
             "Args",
             (),
             {
                 "direction": "down",
-                "path": "file.txt",
+                "paths": ["file.txt"],
+                "config": False,
                 "instance": None,
                 "verbose": False,
             },
         )()
         with pytest.raises(VastlyError, match="Not in a git repo"):
-            _cmd_cp(args)
+            cmd_cp(args)
 
     def test_cp_raises_when_no_remote(self, monkeypatch):
-        from vastly.cli import _cmd_cp
+        from vastly.commands import cmd_cp
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: Path("/repo"))
+        monkeypatch.setattr("vastly.commands._git_root", lambda: Path("/repo"))
         monkeypatch.setattr(
-            "vastly.cli.load_config",
-            lambda **kw: {
-                "ide": "code",
-                "sshUser": "root",
-                "sshKeyPath": None,
-                "portForwards": [],
-                "workspace": "/workspace",
-                "disableAutoTmux": False,
-                "gitRemote": "origin",
-                "postInstall": [],
-                "installCommand": None,
-                "copyFiles": [],
-            },
+            "vastly.commands.load_config",
+            lambda **kw: _config(portForwards=[]),
         )
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
-        monkeypatch.setattr("vastly.cli._local_repo_info", lambda _: None)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._local_repo_info", lambda _: None)
 
         args = type(
             "Args",
             (),
             {
                 "direction": "down",
-                "path": "file.txt",
+                "paths": ["file.txt"],
+                "config": False,
                 "instance": None,
                 "verbose": False,
             },
         )()
         with pytest.raises(VastlyError, match="Could not determine repo name"):
-            _cmd_cp(args)
+            cmd_cp(args)
 
     def test_cp_up_raises_when_local_file_missing(self, monkeypatch, tmp_path):
-        from vastly.cli import _cmd_cp
+        from vastly.commands import cmd_cp
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: tmp_path)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: tmp_path)
         monkeypatch.setattr(
-            "vastly.cli.load_config",
-            lambda **kw: {
-                "ide": "code",
-                "sshUser": "root",
-                "sshKeyPath": None,
-                "portForwards": [],
-                "workspace": "/workspace",
-                "disableAutoTmux": False,
-                "gitRemote": "origin",
-                "postInstall": [],
-                "installCommand": None,
-                "copyFiles": [],
-            },
+            "vastly.commands.load_config",
+            lambda **kw: _config(portForwards=[]),
         )
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
-        monkeypatch.setattr("vastly.cli._local_repo_info", lambda _: ("url", "repo"))
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._local_repo_info", lambda _: ("url", "repo"))
         monkeypatch.setattr(
-            "vastly.cli.get_running_instances",
+            "vastly.commands.get_running_instances",
             lambda _: [
-                {"name": "test", "id": 1, "alias": None, "status": "running"},
+                _inst(name="test", id=1),
             ],
         )
 
@@ -1575,16 +1499,17 @@ class TestCp:
             (),
             {
                 "direction": "up",
-                "path": "nonexistent.txt",
+                "paths": ["nonexistent.txt"],
+                "config": False,
                 "instance": None,
                 "verbose": False,
             },
         )()
-        with pytest.raises(VastlyError, match="Local path not found"):
-            _cmd_cp(args)
+        with pytest.raises(VastlyError, match="All copies failed"):
+            cmd_cp(args)
 
 
-# ── Lifecycle tests ──────────────────────────────────────────────────
+# -- Lifecycle tests ------------------------------------------------------
 
 
 def _make_api_instance(
@@ -1606,18 +1531,7 @@ def _make_api_instance(
     return base
 
 
-_MINIMAL_CONFIG = {
-    "ide": "code",
-    "sshUser": "root",
-    "sshKeyPath": None,
-    "portForwards": [],
-    "workspace": "/workspace",
-    "disableAutoTmux": False,
-    "gitRemote": "origin",
-    "postInstall": [],
-    "installCommand": None,
-    "copyFiles": [],
-}
+_MINIMAL_CONFIG = _config(portForwards=[])
 
 
 class TestSyncInstancesLifecycle:
@@ -1643,7 +1557,7 @@ class TestSyncInstancesLifecycle:
         results = sync_instances(_MINIMAL_CONFIG)
 
         assert len(results) == 3
-        statuses = {r["status"] for r in results}
+        statuses = {r.status for r in results}
         assert statuses == {"running", "stopped", "exited"}
 
     def test_only_running_get_ssh_configs(self, tmp_path, monkeypatch):
@@ -1658,10 +1572,10 @@ class TestSyncInstancesLifecycle:
 
         # Only the running instance should have an SSH config written
         config_files = [f.name for f in ssh_dir.iterdir()]
-        running_names = [r["name"] for r in results if r["status"] == "running"]
+        running_names = [r.name for r in results if r.status == "running"]
         assert len(running_names) == 1
         assert running_names[0] in config_files
-        stopped_names = [r["name"] for r in results if r["status"] == "stopped"]
+        stopped_names = [r.name for r in results if r.status == "stopped"]
         assert stopped_names[0] not in config_files
 
     def test_returns_non_running_when_nothing_running(self, monkeypatch):
@@ -1674,7 +1588,7 @@ class TestSyncInstancesLifecycle:
         results = sync_instances(_MINIMAL_CONFIG)
 
         assert len(results) == 2
-        assert all(r["status"] != "running" for r in results)
+        assert all(r.status != "running" for r in results)
 
     def test_aliases_survive_stopped_state(self, tmp_path, monkeypatch):
         aliases_file = tmp_path / "aliases.json"
@@ -1685,7 +1599,7 @@ class TestSyncInstancesLifecycle:
 
         results = sync_instances(_MINIMAL_CONFIG)
 
-        assert results[0]["alias"] == "train"
+        assert results[0].alias == "train"
         # Alias should still be in the file
         saved = json.loads(aliases_file.read_text(encoding="utf-8"))
         assert "1" in saved
@@ -1733,11 +1647,11 @@ class TestSyncInstancesLifecycle:
 
         results = sync_instances(_MINIMAL_CONFIG)
 
-        running = [r for r in results if r["status"] == "running"][0]
-        stopped = [r for r in results if r["status"] == "stopped"][0]
+        running = [r for r in results if r.status == "running"][0]
+        stopped = [r for r in results if r.status == "stopped"][0]
         # Running gets clean name, stopped gets collision suffix
-        assert running["name"] == "1xRTX4090-TW"
-        assert stopped["name"] == "1xRTX4090-TW-2"
+        assert running.name == "1xRTX4090-TW"
+        assert stopped.name == "1xRTX4090-TW-2"
 
     def test_cached_fallback_includes_status(self, tmp_path, monkeypatch):
         from vastly.errors import APIError
@@ -1751,8 +1665,8 @@ class TestSyncInstancesLifecycle:
 
         results = sync_instances(_MINIMAL_CONFIG)
 
-        assert results[0]["status"] == "running"
-        assert results[0]["alias"] is None
+        assert results[0].status == "running"
+        assert results[0].alias is None
 
 
 class TestGetRunningInstances:
@@ -1775,7 +1689,7 @@ class TestGetRunningInstances:
         results = get_running_instances(_MINIMAL_CONFIG)
 
         assert len(results) == 1
-        assert results[0]["status"] == "running"
+        assert results[0].status == "running"
 
     def test_raises_with_hint_when_stopped_exist(self, monkeypatch):
         api_data = [
@@ -1799,14 +1713,12 @@ class TestShowTableMixedStates:
 
     def test_running_shows_uptime(self, capsys):
         instances = [
-            {
-                "name": "1xRTX4090-TW",
-                "cached": False,
-                "status": "running",
-                "dph_total": 0.25,
-                "start_date": time.time() - 3600,
-                "alias": None,
-            }
+            _inst(
+                name="1xRTX4090-TW",
+                status="running",
+                dph_total=0.25,
+                start_date=time.time() - 3600,
+            )
         ]
         show_table(instances)
         output = capsys.readouterr().out
@@ -1815,14 +1727,11 @@ class TestShowTableMixedStates:
 
     def test_stopped_shows_status(self, capsys):
         instances = [
-            {
-                "name": "2xA100-US",
-                "cached": False,
-                "status": "stopped",
-                "dph_total": 1.20,
-                "start_date": None,
-                "alias": None,
-            }
+            _inst(
+                name="2xA100-US",
+                status="stopped",
+                dph_total=1.20,
+            )
         ]
         show_table(instances)
         output = capsys.readouterr().out
@@ -1832,14 +1741,11 @@ class TestShowTableMixedStates:
 
     def test_exited_shows_status(self, capsys):
         instances = [
-            {
-                "name": "1xRTX3090-DE",
-                "cached": False,
-                "status": "exited",
-                "dph_total": 0.18,
-                "start_date": None,
-                "alias": None,
-            }
+            _inst(
+                name="1xRTX3090-DE",
+                status="exited",
+                dph_total=0.18,
+            )
         ]
         show_table(instances)
         output = capsys.readouterr().out
@@ -1847,22 +1753,18 @@ class TestShowTableMixedStates:
 
     def test_mixed_states(self, capsys):
         instances = [
-            {
-                "name": "1xRTX4090-TW",
-                "cached": False,
-                "status": "running",
-                "dph_total": 0.25,
-                "start_date": time.time() - 3600,
-                "alias": "train",
-            },
-            {
-                "name": "2xA100-US",
-                "cached": False,
-                "status": "stopped",
-                "dph_total": 1.20,
-                "start_date": None,
-                "alias": None,
-            },
+            _inst(
+                name="1xRTX4090-TW",
+                status="running",
+                dph_total=0.25,
+                start_date=time.time() - 3600,
+                alias="train",
+            ),
+            _inst(
+                name="2xA100-US",
+                status="stopped",
+                dph_total=1.20,
+            ),
         ]
         show_table(instances)
         output = capsys.readouterr().out
@@ -1874,22 +1776,19 @@ class TestShowTableMixedStates:
         """Cost column should align even when labels differ in length."""
         monkeypatch.setattr("vastly._COLOR", False)
         instances = [
-            {
-                "name": "1xRTX4090-TW",
-                "cached": False,
-                "status": "running",
-                "dph_total": 0.25,
-                "start_date": time.time() - 3600,
-                "alias": "train",
-            },
-            {
-                "name": "2xA100-US",
-                "cached": False,
-                "status": "running",
-                "dph_total": 1.20,
-                "start_date": time.time() - 7200,
-                "alias": None,
-            },
+            _inst(
+                name="1xRTX4090-TW",
+                status="running",
+                dph_total=0.25,
+                start_date=time.time() - 3600,
+                alias="train",
+            ),
+            _inst(
+                name="2xA100-US",
+                status="running",
+                dph_total=1.20,
+                start_date=time.time() - 7200,
+            ),
         ]
         show_table(instances)
         output = capsys.readouterr().out
@@ -1904,22 +1803,18 @@ class TestShowTableMixedStates:
         """Cost column should align across running and non-running instances."""
         monkeypatch.setattr("vastly._COLOR", False)
         instances = [
-            {
-                "name": "1xRTX4090-TW",
-                "cached": False,
-                "status": "running",
-                "dph_total": 0.25,
-                "start_date": time.time() - 3600,
-                "alias": "train",
-            },
-            {
-                "name": "2xA100-US",
-                "cached": False,
-                "status": "stopped",
-                "dph_total": 1.20,
-                "start_date": None,
-                "alias": None,
-            },
+            _inst(
+                name="1xRTX4090-TW",
+                status="running",
+                dph_total=0.25,
+                start_date=time.time() - 3600,
+                alias="train",
+            ),
+            _inst(
+                name="2xA100-US",
+                status="stopped",
+                dph_total=1.20,
+            ),
         ]
         show_table(instances)
         output = capsys.readouterr().out
@@ -1931,168 +1826,160 @@ class TestShowTableMixedStates:
 
 
 class TestCmdStart:
-    """Test _cmd_start state classification, polling, and auto-connect."""
+    """Test cmd_start state classification, polling, and auto-connect."""
 
     def test_already_running_raises(self, monkeypatch):
-        from vastly.cli import _cmd_start
+        from vastly.commands import cmd_start
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "a", "id": 1, "status": "running", "alias": None},
+                _inst(name="a", id=1, status="running"),
             ],
         )
 
         args = type("Args", (), {"name": None, "no_connect": False, "verbose": False})()
         with pytest.raises(VastlyError, match="already running"):
-            _cmd_start(args)
+            cmd_start(args)
 
     def test_offline_raises(self, monkeypatch):
-        from vastly.cli import _cmd_start
+        from vastly.commands import cmd_start
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "a", "id": 1, "status": "running", "alias": None},
-                {"name": "b", "id": 2, "status": "offline", "alias": None},
+                _inst(name="a", id=1, status="running"),
+                _inst(name="b", id=2, status="offline"),
             ],
         )
 
         args = type("Args", (), {"name": "b", "no_connect": False, "verbose": False})()
         with pytest.raises(VastlyError, match="Cannot start.*offline"):
-            _cmd_start(args)
+            cmd_start(args)
 
     def test_stopped_calls_start_action(self, monkeypatch):
-        from vastly.cli import _cmd_start
+        from vastly.commands import cmd_start
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "a", "id": 1, "status": "running", "alias": None},
-                {"name": "b", "id": 2, "status": "stopped", "alias": None},
+                _inst(name="a", id=1, status="running"),
+                _inst(name="b", id=2, status="stopped"),
             ],
         )
 
         actions = []
         monkeypatch.setattr(
-            "vastly.cli._vastai_action",
-            lambda action, inst: actions.append((action, inst["id"])),
+            "vastly.commands._vastai_action",
+            lambda action, inst: actions.append((action, inst.id)),
         )
 
         args = type("Args", (), {"name": "b", "no_connect": True, "verbose": False})()
-        _cmd_start(args)
+        cmd_start(args)
 
         assert actions == [("start", 2)]
 
     def test_no_connect_returns_after_start(self, monkeypatch):
-        from vastly.cli import _cmd_start
+        from vastly.commands import cmd_start
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "b", "id": 2, "status": "stopped", "alias": None},
+                _inst(name="b", id=2, status="stopped"),
             ],
         )
-        monkeypatch.setattr("vastly.cli._vastai_action", lambda action, inst: None)
+        monkeypatch.setattr("vastly.commands._vastai_action", lambda action, inst: None)
 
         connect_called = []
         monkeypatch.setattr(
-            "vastly.cli._cmd_connect", lambda a: connect_called.append(True)
+            "vastly.commands.cmd_connect", lambda a: connect_called.append(True)
         )
 
         args = type("Args", (), {"name": None, "no_connect": True, "verbose": False})()
-        _cmd_start(args)
+        cmd_start(args)
 
         assert connect_called == []
 
     def test_transitional_skips_start_call(self, monkeypatch):
-        from vastly.cli import _cmd_start
+        from vastly.commands import cmd_start
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "b", "id": 2, "status": "loading", "alias": None},
+                _inst(name="b", id=2, status="loading"),
             ],
         )
 
         actions = []
         monkeypatch.setattr(
-            "vastly.cli._vastai_action", lambda action, inst: actions.append(action)
+            "vastly.commands._vastai_action", lambda action, inst: actions.append(action)
         )
 
         args = type("Args", (), {"name": None, "no_connect": True, "verbose": False})()
-        _cmd_start(args)
+        cmd_start(args)
 
         assert actions == []  # Should not call vastai start for loading state
 
     def test_timeout_raises(self, monkeypatch):
-        from vastly.cli import _cmd_start
-        import vastly.cli
+        from vastly.commands import cmd_start
+        import vastly.commands
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "b", "id": 2, "status": "stopped", "alias": None},
+                _inst(name="b", id=2, status="stopped"),
             ],
         )
-        monkeypatch.setattr("vastly.cli._vastai_action", lambda action, inst: None)
+        monkeypatch.setattr("vastly.commands._vastai_action", lambda action, inst: None)
 
         # Make polling instant and always return "stopped"
         monkeypatch.setattr("time.sleep", lambda _: None)
-        monkeypatch.setattr(vastly.cli, "_START_TIMEOUT", 5)
-        monkeypatch.setattr(vastly.cli, "_START_POLL_INTERVAL", 5)
+        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 5)
+        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 5)
         monkeypatch.setattr(
-            "vastly.cli.subprocess.run",
-            lambda *a, **kw: type(
-                "R",
-                (),
-                {
-                    "returncode": 0,
-                    "stdout": '{"cur_state": "stopped"}',
-                    "stderr": "",
-                },
-            )(),
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout='{"cur_state": "stopped"}', stderr=""),
         )
 
         args = type("Args", (), {"name": None, "no_connect": False, "verbose": False})()
         with pytest.raises(VastlyError, match="Timed out"):
-            _cmd_start(args)
+            cmd_start(args)
 
     def test_scheduling_hint(self, monkeypatch, capsys):
-        from vastly.cli import _cmd_start
-        import vastly.cli
+        from vastly.commands import cmd_start
+        import vastly.commands
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "b", "id": 2, "status": "stopped", "alias": None},
+                _inst(name="b", id=2, status="stopped"),
             ],
         )
-        monkeypatch.setattr("vastly.cli._vastai_action", lambda action, inst: None)
+        monkeypatch.setattr("vastly.commands._vastai_action", lambda action, inst: None)
         monkeypatch.setattr("time.sleep", lambda _: None)
-        monkeypatch.setattr(vastly.cli, "_START_TIMEOUT", 10)
-        monkeypatch.setattr(vastly.cli, "_START_POLL_INTERVAL", 5)
+        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
+        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 5)
 
         # Return scheduling then running
         poll_count = [0]
@@ -2100,26 +1987,14 @@ class TestCmdStart:
         def fake_run(*a, **kw):
             poll_count[0] += 1
             if poll_count[0] == 1:
-                return type(
-                    "R",
-                    (),
-                    {
-                        "returncode": 0,
-                        "stdout": '{"cur_state": "scheduling"}',
-                        "stderr": "",
-                    },
-                )()
-            return type(
-                "R",
-                (),
-                {"returncode": 0, "stdout": '{"cur_state": "running"}', "stderr": ""},
-            )()
+                return subprocess.CompletedProcess([], 0, stdout='{"cur_state": "scheduling"}', stderr="")
+            return subprocess.CompletedProcess([], 0, stdout='{"cur_state": "running"}', stderr="")
 
-        monkeypatch.setattr("vastly.cli.subprocess.run", fake_run)
-        monkeypatch.setattr("vastly.cli._cmd_connect", lambda a: None)
+        monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
+        monkeypatch.setattr("vastly.commands.cmd_connect", lambda a: None)
 
         args = type("Args", (), {"name": None, "no_connect": False, "verbose": False})()
-        _cmd_start(args)
+        cmd_start(args)
 
         output = capsys.readouterr().out
         assert "scheduling" in output
@@ -2127,69 +2002,69 @@ class TestCmdStart:
 
 
 class TestCmdStopLifecycle:
-    """Test _cmd_stop with state-aware behavior."""
+    """Test cmd_stop with state-aware behavior."""
 
     def test_stop_already_stopped_raises(self, monkeypatch):
-        from vastly.cli import _cmd_stop
+        from vastly.commands import cmd_stop
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "a", "id": 1, "status": "stopped", "alias": None},
+                _inst(name="a", id=1, status="stopped"),
             ],
         )
 
         args = type("Args", (), {"name": "a", "all": False, "verbose": False})()
         with pytest.raises(VastlyError, match="Already stopped"):
-            _cmd_stop(args)
+            cmd_stop(args)
 
     def test_stop_scheduling_sends_stop(self, monkeypatch):
-        from vastly.cli import _cmd_stop
+        from vastly.commands import cmd_stop
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "a", "id": 1, "status": "scheduling", "alias": None},
+                _inst(name="a", id=1, status="scheduling"),
             ],
         )
 
         actions = []
-        monkeypatch.setattr("vastly.cli._vastai_action", lambda a, i: actions.append(a))
+        monkeypatch.setattr("vastly.commands._vastai_action", lambda a, i: actions.append(a))
 
         args = type("Args", (), {"name": "a", "all": False, "verbose": False})()
-        _cmd_stop(args)
+        cmd_stop(args)
 
         assert actions == ["stop"]
 
     def test_stop_all_mixed_states(self, monkeypatch):
-        from vastly.cli import _cmd_stop
+        from vastly.commands import cmd_stop
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "a", "id": 1, "status": "running", "alias": None},
-                {"name": "b", "id": 2, "status": "stopped", "alias": None},
-                {"name": "c", "id": 3, "status": "scheduling", "alias": None},
+                _inst(name="a", id=1, status="running"),
+                _inst(name="b", id=2, status="stopped"),
+                _inst(name="c", id=3, status="scheduling"),
             ],
         )
         monkeypatch.setattr("builtins.input", lambda _: "y")
 
         stopped_ids = []
         monkeypatch.setattr(
-            "vastly.cli._vastai_action", lambda a, i: stopped_ids.append(i["id"])
+            "vastly.commands._vastai_action", lambda a, i: stopped_ids.append(i.id)
         )
 
         args = type("Args", (), {"name": None, "all": True, "verbose": False})()
-        _cmd_stop(args)
+        cmd_stop(args)
 
         # Should stop running + scheduling, skip stopped
         assert 1 in stopped_ids
@@ -2197,53 +2072,53 @@ class TestCmdStopLifecycle:
         assert 2 not in stopped_ids
 
     def test_stop_offline_raises(self, monkeypatch):
-        from vastly.cli import _cmd_stop
+        from vastly.commands import cmd_stop
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_synced_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
-                {"name": "a", "id": 1, "status": "offline", "alias": None},
+                _inst(name="a", id=1, status="offline"),
             ],
         )
 
         args = type("Args", (), {"name": "a", "all": False, "verbose": False})()
         with pytest.raises(VastlyError, match="No running instances to stop"):
-            _cmd_stop(args)
+            cmd_stop(args)
 
 
 class TestVastaiActionStart:
     """Test that _vastai_action handles 'start' correctly."""
 
     def test_start_past_tense(self, monkeypatch, capsys):
-        from vastly.cli import _vastai_action
+        from vastly.commands import _vastai_action
 
         monkeypatch.setattr(
-            "vastly.cli.subprocess.run",
+            "vastly.commands.subprocess.run",
             lambda *a, **kw: type(
                 "R", (), {"returncode": 0, "stdout": "", "stderr": ""}
             )(),
         )
 
-        _vastai_action("start", {"name": "test", "id": 1})
+        _vastai_action("start", _inst(name="test", id=1))
 
         output = capsys.readouterr().out
         assert "Started" in output
 
 
 class TestCmdConfig:
-    """Test _cmd_config output."""
+    """Test cmd_config output."""
 
     def test_shows_resolved_config(self, monkeypatch, capsys, tmp_path):
-        from vastly.cli import _cmd_config
+        from vastly.commands import cmd_config
 
         cfg = tmp_path / ".vastly.json"
         cfg.write_text('{"ide": "cursor"}', encoding="utf-8")
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr(
-            "vastly.cli.load_config",
+            "vastly.commands.load_config",
             lambda **kw: {
                 **_MINIMAL_CONFIG,
                 "ide": "cursor",
@@ -2252,7 +2127,7 @@ class TestCmdConfig:
         monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
 
         args = type("Args", (), {"verbose": False})()
-        _cmd_config(args)
+        cmd_config(args)
 
         output = capsys.readouterr().out
         assert "vastly v" in output
@@ -2260,22 +2135,22 @@ class TestCmdConfig:
         assert "tips:" in output
 
     def test_works_without_git_repo(self, monkeypatch, capsys, tmp_path):
-        from vastly.cli import _cmd_config
+        from vastly.commands import cmd_config
 
         cfg = tmp_path / ".vastly.json"
         cfg.write_text("{}", encoding="utf-8")
-        monkeypatch.setattr("vastly.cli._git_root", lambda: None)
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
 
         args = type("Args", (), {"verbose": False})()
-        _cmd_config(args)
+        cmd_config(args)
 
         output = capsys.readouterr().out
         assert "not in a git repo" in output
 
     def test_shows_project_config(self, monkeypatch, capsys, tmp_path):
-        from vastly.cli import _cmd_config
+        from vastly.commands import cmd_config
 
         cfg = tmp_path / ".vastly.json"
         cfg.write_text("{}", encoding="utf-8")
@@ -2284,9 +2159,9 @@ class TestCmdConfig:
         (project_dir / ".vastly.json").write_text(
             '{"postInstall": ["make"]}', encoding="utf-8"
         )
-        monkeypatch.setattr("vastly.cli._git_root", lambda: project_dir)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: project_dir)
         monkeypatch.setattr(
-            "vastly.cli.load_config",
+            "vastly.commands.load_config",
             lambda **kw: {
                 **_MINIMAL_CONFIG,
                 "postInstall": ["make"],
@@ -2295,7 +2170,7 @@ class TestCmdConfig:
         monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
 
         args = type("Args", (), {"verbose": False})()
-        _cmd_config(args)
+        cmd_config(args)
 
         output = capsys.readouterr().out
         assert "project config:" in output
@@ -2306,32 +2181,30 @@ class TestHttpsRemoteWarning:
     """Test HTTPS remote warning (now in setup_instances, not _cmd_connect)."""
 
     def test_connect_does_not_warn_about_https(self, monkeypatch, capsys):
-        """Warning moved to setup_instances, _cmd_connect should not warn."""
-        from vastly.cli import _cmd_connect
+        """Warning moved to setup_instances, cmd_connect should not warn."""
+        from vastly.commands import cmd_connect
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: Path("/repo"))
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: Path("/repo"))
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.sync_instances",
+            "vastly.commands.sync_instances",
             lambda _: [
-                {
-                    "name": "test",
-                    "id": 1,
-                    "status": "running",
-                    "alias": None,
-                    "cached": False,
-                    "dph_total": 0.25,
-                    "start_date": 1700000000,
-                },
+                _inst(
+                    name="test",
+                    id=1,
+                    status="running",
+                    dph_total=0.25,
+                    start_date=1700000000,
+                ),
             ],
         )
         monkeypatch.setattr(
-            "vastly.cli._local_repo_info",
+            "vastly.commands._local_repo_info",
             lambda _: ("https://github.com/user/repo.git", "repo"),
         )
-        monkeypatch.setattr("vastly.cli.setup_instances", lambda *a, **kw: ["test"])
-        monkeypatch.setattr("vastly.cli.open_ide", lambda *a: None)
+        monkeypatch.setattr("vastly.commands.setup_instances", lambda *a, **kw: ["test"])
+        monkeypatch.setattr("vastly.commands.open_ide", lambda *a: None)
         monkeypatch.setattr("vastly.update.check_for_update", lambda: None)
 
         args = type(
@@ -2344,7 +2217,7 @@ class TestHttpsRemoteWarning:
                 "verbose": False,
             },
         )()
-        _cmd_connect(args)
+        cmd_connect(args)
 
         output = capsys.readouterr().out
         assert "HTTPS" not in output
@@ -2363,7 +2236,7 @@ class TestHttpsRemoteWarning:
         assert fix_url == "git@github.com:user/repo.git"
 
 
-# ── Tests for code review fixes ──────────────────────────────────────
+# -- Tests for code review fixes ------------------------------------------
 
 
 class TestParseVersionPreRelease:
@@ -2382,7 +2255,7 @@ class TestParseVersionPreRelease:
     def test_pre_release_dev(self):
         from vastly.update import _parse_version
 
-        assert _parse_version("1.0.0.dev1") == (1, 0, 0, 0)
+        assert _parse_version("1.0.0.dev1") == (1, 0, 0)
 
     def test_pre_release_rc(self):
         from vastly.update import _parse_version
@@ -2392,7 +2265,7 @@ class TestParseVersionPreRelease:
     def test_pre_release_post(self):
         from vastly.update import _parse_version
 
-        assert _parse_version("0.4.0.post1") == (0, 4, 0, 0)
+        assert _parse_version("0.4.0.post1") == (0, 4, 0)
 
     def test_empty_string(self):
         from vastly.update import _parse_version
@@ -2413,14 +2286,14 @@ class TestCmdNameClear:
         aliases_file.write_text('{"123": "train"}', encoding="utf-8")
         monkeypatch.setattr("vastly.instance._ALIASES_FILE", aliases_file)
 
-        from vastly.cli import _cmd_name
+        from vastly.commands import cmd_name
 
         args = type(
             "Args",
             (),
             {"alias": "train", "clear": True, "instance": None, "verbose": False},
         )()
-        _cmd_name(args)
+        cmd_name(args)
 
         saved = json.loads(aliases_file.read_text(encoding="utf-8"))
         assert "123" not in saved
@@ -2430,7 +2303,7 @@ class TestCmdNameClear:
         aliases_file.write_text("{}", encoding="utf-8")
         monkeypatch.setattr("vastly.instance._ALIASES_FILE", aliases_file)
 
-        from vastly.cli import _cmd_name
+        from vastly.commands import cmd_name
 
         args = type(
             "Args",
@@ -2438,14 +2311,14 @@ class TestCmdNameClear:
             {"alias": "nope", "clear": True, "instance": None, "verbose": False},
         )()
         with pytest.raises(VastlyError, match="No alias 'nope' found"):
-            _cmd_name(args)
+            cmd_name(args)
 
 
 class TestCmdNameSshCleanup:
-    """Test that _cmd_name cleans up old alias SSH config on reassignment (review item 1)."""
+    """Test that cmd_name cleans up old alias SSH config on reassignment (review item 1)."""
 
     def test_reassign_alias_removes_old_ssh_config(self, tmp_path, monkeypatch):
-        from vastly.cli import _cmd_name
+        from vastly.commands import cmd_name
 
         ssh_dir = tmp_path / "ssh"
         ssh_dir.mkdir()
@@ -2455,28 +2328,28 @@ class TestCmdNameSshCleanup:
         )
 
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", ssh_dir)
-        monkeypatch.setattr("vastly.cli.SSH_CONFIG_DIR", ssh_dir)
+        monkeypatch.setattr("vastly.commands.SSH_CONFIG_DIR", ssh_dir)
 
         aliases_file = tmp_path / "aliases.json"
         aliases_file.write_text('{"42": "old-alias"}', encoding="utf-8")
         monkeypatch.setattr("vastly.instance._ALIASES_FILE", aliases_file)
-        monkeypatch.setattr("vastly.cli._git_root", lambda: Path("/repo"))
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: Path("/repo"))
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.get_running_instances",
+            "vastly.commands.get_running_instances",
             lambda _: [
-                {
-                    "name": "1xRTX4090-TW",
-                    "id": 42,
-                    "status": "running",
-                    "alias": "old-alias",
-                },
+                _inst(
+                    name="1xRTX4090-TW",
+                    id=42,
+                    status="running",
+                    alias="old-alias",
+                ),
             ],
         )
-        monkeypatch.setattr("vastly.cli.validate_alias", lambda *a: None)
+        monkeypatch.setattr("vastly.commands.validate_alias", lambda *a: None)
         monkeypatch.setattr(
-            "vastly.cli.select_instance", lambda insts, name, **kw: insts[:1]
+            "vastly.commands.select_instance", lambda insts, name, **kw: insts[:1]
         )
 
         args = type(
@@ -2489,7 +2362,7 @@ class TestCmdNameSshCleanup:
                 "verbose": False,
             },
         )()
-        _cmd_name(args)
+        cmd_name(args)
 
         assert not old_config.exists(), "Old alias SSH config should be removed"
 
@@ -2498,30 +2371,28 @@ class TestLocalRepoInfoErrors:
     """Test _local_repo_info error paths (review item 20)."""
 
     def test_returns_none_when_git_not_found(self, monkeypatch):
-        from vastly.cli import _local_repo_info
+        from vastly.commands import _local_repo_info
 
         def raise_fnf(*a, **kw):
             raise FileNotFoundError
 
-        monkeypatch.setattr("vastly.cli.subprocess.run", raise_fnf)
+        monkeypatch.setattr("vastly.commands.subprocess.run", raise_fnf)
         assert _local_repo_info("origin") is None
 
     def test_returns_none_on_nonzero_returncode(self, monkeypatch):
-        from vastly.cli import _local_repo_info
+        from vastly.commands import _local_repo_info
 
         monkeypatch.setattr(
-            "vastly.cli.subprocess.run",
-            lambda *a, **kw: type(
-                "R", (), {"returncode": 1, "stdout": "", "stderr": ""}
-            )(),
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 1, stdout="", stderr=""),
         )
         assert _local_repo_info("origin") is None
 
     def test_returns_none_on_empty_url(self, monkeypatch):
-        from vastly.cli import _local_repo_info
+        from vastly.commands import _local_repo_info
 
         monkeypatch.setattr(
-            "vastly.cli.subprocess.run",
+            "vastly.commands.subprocess.run",
             lambda *a, **kw: type(
                 "R", (), {"returncode": 0, "stdout": "", "stderr": ""}
             )(),
@@ -2529,37 +2400,28 @@ class TestLocalRepoInfoErrors:
         assert _local_repo_info("origin") is None
 
     def test_prints_stderr_on_failure(self, monkeypatch, capsys):
-        from vastly.cli import _local_repo_info
+        from vastly.commands import _local_repo_info
 
         monkeypatch.setattr(
-            "vastly.cli.subprocess.run",
-            lambda *a, **kw: type(
-                "R",
-                (),
-                {
-                    "returncode": 1,
-                    "stdout": "",
-                    "stderr": "fatal: bad remote",
-                },
-            )(),
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 1, stdout="", stderr="fatal: bad remote"),
         )
         _local_repo_info("origin")
         assert "bad remote" in capsys.readouterr().err
 
 
 class TestCheckPrerequisitesExitCode:
-    """Test that _check_prerequisites exits non-zero on failure (review item 8)."""
+    """Test that _check_prerequisites raises VastlyError on failure."""
 
-    def test_exits_nonzero_when_vastai_missing(self, monkeypatch):
-        from vastly.cli import _check_prerequisites
+    def test_raises_when_vastai_missing(self, monkeypatch):
+        from vastly.commands import _check_prerequisites
 
         monkeypatch.setattr("shutil.which", lambda cmd: None)
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(VastlyError, match="vastai"):
             _check_prerequisites(ide="code")
-        assert exc_info.value.code == 1
 
     def test_no_exit_when_all_present(self, monkeypatch):
-        from vastly.cli import _check_prerequisites
+        from vastly.commands import _check_prerequisites
 
         monkeypatch.setattr("shutil.which", lambda cmd: f"/usr/bin/{cmd}")
         # Should not raise
@@ -2570,32 +2432,27 @@ class TestConnectStoppedInstance:
     """Test that vst connect <stopped-name> gives a helpful error (review item 5)."""
 
     def test_stopped_instance_gives_start_hint(self, monkeypatch):
-        from vastly.cli import _cmd_connect
+        from vastly.commands import cmd_connect
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: Path("/repo"))
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: Path("/repo"))
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.sync_instances",
+            "vastly.commands.sync_instances",
             lambda _: [
-                {
-                    "name": "1xRTX4090-TW",
-                    "id": 1,
-                    "status": "running",
-                    "alias": None,
-                    "cached": False,
-                    "dph_total": 0.25,
-                    "start_date": 1700000000,
-                },
-                {
-                    "name": "2xA100-US",
-                    "id": 2,
-                    "status": "stopped",
-                    "alias": None,
-                    "cached": False,
-                    "dph_total": 0.50,
-                    "start_date": None,
-                },
+                _inst(
+                    name="1xRTX4090-TW",
+                    id=1,
+                    status="running",
+                    dph_total=0.25,
+                    start_date=1700000000,
+                ),
+                _inst(
+                    name="2xA100-US",
+                    id=2,
+                    status="stopped",
+                    dph_total=0.50,
+                ),
             ],
         )
 
@@ -2610,36 +2467,33 @@ class TestConnectStoppedInstance:
             },
         )()
         with pytest.raises(VastlyError, match="stopped.*vst start"):
-            _cmd_connect(args)
+            cmd_connect(args)
 
     def test_auto_starts_when_only_stopped(self, monkeypatch, capsys):
         """When no running instances but one stopped, auto-start it."""
-        from vastly.cli import _cmd_connect
+        from vastly.commands import cmd_connect
 
         started_ids = []
 
-        monkeypatch.setattr("vastly.cli._git_root", lambda: Path("/repo"))
-        monkeypatch.setattr("vastly.cli.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.cli._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: Path("/repo"))
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.cli.sync_instances",
+            "vastly.commands.sync_instances",
             lambda _: [
-                {
-                    "name": "1xRTX4090-TW",
-                    "id": 1,
-                    "status": "stopped",
-                    "alias": None,
-                    "cached": False,
-                    "dph_total": 0.25,
-                    "start_date": None,
-                },
+                _inst(
+                    name="1xRTX4090-TW",
+                    id=1,
+                    status="stopped",
+                    dph_total=0.25,
+                ),
             ],
         )
         monkeypatch.setattr(
-            "vastly.cli._vastai_action",
-            lambda action, inst: started_ids.append(inst["id"]),
+            "vastly.commands._vastai_action",
+            lambda action, inst: started_ids.append(inst.id),
         )
-        monkeypatch.setattr("vastly.cli._poll_for_running", lambda inst_id: None)
+        monkeypatch.setattr("vastly.commands._poll_for_running", lambda inst_id: None)
 
         args = type(
             "Args",
@@ -2659,32 +2513,27 @@ class TestConnectStoppedInstance:
             call_count[0] += 1
             if call_count[0] > 1:
                 return [
-                    {
-                        "name": "1xRTX4090-TW",
-                        "id": 1,
-                        "status": "running",
-                        "alias": None,
-                        "cached": False,
-                        "dph_total": 0.25,
-                        "start_date": 1700000000,
-                    },
+                    _inst(
+                        name="1xRTX4090-TW",
+                        id=1,
+                        status="running",
+                        dph_total=0.25,
+                        start_date=1700000000,
+                    ),
                 ]
             return [
-                {
-                    "name": "1xRTX4090-TW",
-                    "id": 1,
-                    "status": "stopped",
-                    "alias": None,
-                    "cached": False,
-                    "dph_total": 0.25,
-                    "start_date": None,
-                },
+                _inst(
+                    name="1xRTX4090-TW",
+                    id=1,
+                    status="stopped",
+                    dph_total=0.25,
+                ),
             ]
 
-        monkeypatch.setattr("vastly.cli.sync_instances", fake_sync)
-        monkeypatch.setattr("vastly.cli.open_ide", lambda *a: None)
+        monkeypatch.setattr("vastly.commands.sync_instances", fake_sync)
+        monkeypatch.setattr("vastly.commands.open_ide", lambda *a: None)
 
-        _cmd_connect(args)
+        cmd_connect(args)
 
         assert 1 in started_ids
         output = capsys.readouterr().out
@@ -2741,64 +2590,60 @@ class TestUnknownSubcommand:
     """Test that unknown subcommands are treated as instance names for connect."""
 
     def test_unknown_subcommand_becomes_connect(self, monkeypatch):
-        """vst my-gpu → vst connect my-gpu."""
+        """vst my-gpu -> vst connect my-gpu."""
         from vastly.cli import main
 
-        monkeypatch.setattr("sys.argv", ["vst", "my-gpu"])
-        monkeypatch.setattr("vastly.cli._cmd_connect", lambda args: None)
+        captured = {}
+        monkeypatch.setattr(
+            "vastly.cli.cmd_connect",
+            lambda args: captured.update(name=args.name),
+        )
 
-        main()
+        main(["my-gpu"])
 
-        # After main() rewrites argv, parse_args should have set command=connect, name=my-gpu
-        # We verify indirectly: _cmd_connect was called (no error), and sys.argv was rewritten
-        assert sys.argv == ["vst", "connect", "my-gpu"]
+        assert captured["name"] == "my-gpu"
 
     def test_known_subcommand_not_rewritten(self, monkeypatch):
         """vst list should NOT be rewritten."""
         from vastly.cli import main
 
-        monkeypatch.setattr("sys.argv", ["vst", "list"])
-        monkeypatch.setattr("vastly.cli._cmd_list", lambda args: None)
+        monkeypatch.setattr("vastly.cli.cmd_list", lambda args: None)
 
-        main()
-
-        assert sys.argv == ["vst", "list"]
+        main(["list"])  # should call cmd_list, not cmd_connect
 
     def test_flag_not_rewritten(self, monkeypatch):
         """vst --version should NOT insert 'connect' before the flag."""
         from vastly.cli import main
 
-        monkeypatch.setattr("sys.argv", ["vst", "--version"])
-
         with pytest.raises(SystemExit, match="0"):
-            main()
-
-        # --version starts with -, so no rewrite
-        assert sys.argv == ["vst", "--version"]
+            main(["--version"])
 
     def test_verbose_before_name(self, monkeypatch):
-        """vst -v my-gpu → vst -v connect my-gpu."""
+        """vst -v my-gpu -> vst -v connect my-gpu."""
         from vastly.cli import main
 
-        monkeypatch.setattr("sys.argv", ["vst", "-v", "my-gpu"])
-        monkeypatch.setattr("vastly.cli._cmd_connect", lambda args: None)
+        captured = {}
+        monkeypatch.setattr(
+            "vastly.cli.cmd_connect",
+            lambda args: captured.update(name=args.name, verbose=args.verbose),
+        )
 
-        main()
+        main(["-v", "my-gpu"])
 
-        assert sys.argv == ["vst", "-v", "connect", "my-gpu"]
+        assert captured["name"] == "my-gpu"
+        assert captured["verbose"] is True
 
     def test_bare_verbose(self, monkeypatch):
         """vst -v should work as verbose connect."""
         from vastly.cli import main
 
         called = {}
-        monkeypatch.setattr("sys.argv", ["vst", "-v"])
         monkeypatch.setattr(
-            "vastly.cli._cmd_connect",
+            "vastly.cli.cmd_connect",
             lambda args: called.update(verbose=args.verbose),
         )
 
-        main()
+        main(["-v"])
 
         assert called["verbose"] is True
 
@@ -2811,15 +2656,14 @@ class TestPromotedConnectFlags:
         from vastly.cli import main
 
         captured = {}
-        monkeypatch.setattr("sys.argv", ["vst", "-f"])
         monkeypatch.setattr(
-            "vastly.cli._cmd_connect",
+            "vastly.cli.cmd_connect",
             lambda args: captured.update(
                 force_setup=args.force_setup, no_setup=args.no_setup
             ),
         )
 
-        main()
+        main(["-f"])
 
         assert captured["force_setup"] is True
         assert captured["no_setup"] is False
@@ -2829,15 +2673,14 @@ class TestPromotedConnectFlags:
         from vastly.cli import main
 
         captured = {}
-        monkeypatch.setattr("sys.argv", ["vst", "-n"])
         monkeypatch.setattr(
-            "vastly.cli._cmd_connect",
+            "vastly.cli.cmd_connect",
             lambda args: captured.update(
                 force_setup=args.force_setup, no_setup=args.no_setup
             ),
         )
 
-        main()
+        main(["-n"])
 
         assert captured["no_setup"] is True
         assert captured["force_setup"] is False
@@ -2847,15 +2690,14 @@ class TestPromotedConnectFlags:
         from vastly.cli import main
 
         captured = {}
-        monkeypatch.setattr("sys.argv", ["vst", "-f", "my-gpu"])
         monkeypatch.setattr(
-            "vastly.cli._cmd_connect",
+            "vastly.cli.cmd_connect",
             lambda args: captured.update(
                 name=args.name, force_setup=args.force_setup
             ),
         )
 
-        main()
+        main(["-f", "my-gpu"])
 
         assert captured["name"] == "my-gpu"
         assert captured["force_setup"] is True
@@ -2865,15 +2707,14 @@ class TestPromotedConnectFlags:
         from vastly.cli import main
 
         captured = {}
-        monkeypatch.setattr("sys.argv", ["vst", "my-gpu", "-f"])
         monkeypatch.setattr(
-            "vastly.cli._cmd_connect",
+            "vastly.cli.cmd_connect",
             lambda args: captured.update(
                 name=args.name, force_setup=args.force_setup
             ),
         )
 
-        main()
+        main(["my-gpu", "-f"])
 
         assert captured["name"] == "my-gpu"
         assert captured["force_setup"] is True
@@ -2883,13 +2724,12 @@ class TestPromotedConnectFlags:
         from vastly.cli import main
 
         captured = {}
-        monkeypatch.setattr("sys.argv", ["vst", "connect", "-f"])
         monkeypatch.setattr(
-            "vastly.cli._cmd_connect",
+            "vastly.cli.cmd_connect",
             lambda args: captured.update(force_setup=args.force_setup),
         )
 
-        main()
+        main(["connect", "-f"])
 
         assert captured["force_setup"] is True
 
@@ -2902,14 +2742,465 @@ class TestStateConstants:
 
         assert "running" in STOPPABLE_STATES
 
-    def test_startable_states_contain_stopped(self):
-        from vastly.instance import STARTABLE_STATES
+    def test_stopped_states_contain_stopped(self):
+        from vastly.instance import STOPPED_STATES
 
-        assert "stopped" in STARTABLE_STATES
-        assert "exited" in STARTABLE_STATES
+        assert "stopped" in STOPPED_STATES
+        assert "exited" in STOPPED_STATES
 
     def test_transitional_states(self):
         from vastly.instance import TRANSITIONAL_STATES
 
         assert "loading" in TRANSITIONAL_STATES
         assert "scheduling" in TRANSITIONAL_STATES
+
+
+# -- Integration tests (mock at subprocess.run boundary) --------------------
+
+
+def _make_api_response(*instances):
+    """Build a fake subprocess.run result returning JSON instance data."""
+    return subprocess.CompletedProcess([], 0, stdout=json.dumps(list(instances)), stderr="")
+
+
+class TestSyncInstancesIntegration:
+    """Integration tests for sync_instances with mocked subprocess."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate(self, tmp_path, monkeypatch):
+        self.ssh_dir = tmp_path / "ssh"
+        self.ssh_dir.mkdir()
+        self.aliases_file = tmp_path / "aliases.json"
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", self.ssh_dir)
+        monkeypatch.setattr("vastly.instance.SSH_CONFIG_DIR", self.ssh_dir)
+        monkeypatch.setattr("vastly.instance._ALIASES_FILE", self.aliases_file)
+        monkeypatch.setattr("vastly.instance.ensure_ssh_include", lambda: None)
+
+    def test_builds_instances_from_api(self, monkeypatch):
+        api_data = [
+            {
+                "id": 12345,
+                "cur_state": "running",
+                "gpu_name": "RTX 4090",
+                "num_gpus": 1,
+                "dph_total": 0.45,
+                "public_ipaddr": "1.2.3.4",
+                "geolocation": "City, US",
+                "start_date": 1700000000.0,
+                "ports": {"22/tcp": [{"HostPort": "22022"}]},
+            },
+            {
+                "id": 67890,
+                "cur_state": "running",
+                "gpu_name": "A100",
+                "num_gpus": 2,
+                "dph_total": 1.20,
+                "public_ipaddr": "5.6.7.8",
+                "geolocation": "Berlin, DE",
+                "start_date": 1700000000.0,
+                "ports": {"22/tcp": [{"HostPort": "22033"}]},
+            },
+        ]
+        monkeypatch.setattr(
+            "vastly.instance.subprocess.run",
+            lambda *a, **kw: _make_api_response(*api_data),
+        )
+
+        results = sync_instances(_MINIMAL_CONFIG)
+
+        assert len(results) == 2
+        assert all(isinstance(r, Instance) for r in results)
+        assert all(r.status == "running" for r in results)
+        ids = {r.id for r in results}
+        assert ids == {12345, 67890}
+        names = {r.name for r in results}
+        assert "1xRTX4090-US" in names
+        assert "2xA100-DE" in names
+
+    def test_handles_mixed_states(self, monkeypatch):
+        api_data = [
+            {
+                "id": 100,
+                "cur_state": "running",
+                "gpu_name": "RTX 4090",
+                "num_gpus": 1,
+                "dph_total": 0.45,
+                "public_ipaddr": "1.2.3.4",
+                "geolocation": "City, US",
+                "start_date": 1700000000.0,
+                "ports": {"22/tcp": [{"HostPort": "22022"}]},
+            },
+            {
+                "id": 200,
+                "cur_state": "stopped",
+                "gpu_name": "A100",
+                "num_gpus": 1,
+                "dph_total": 0.80,
+                "public_ipaddr": "5.6.7.8",
+                "geolocation": "Tokyo, JP",
+                "start_date": 1700000000.0,
+                "ports": {"22/tcp": [{"HostPort": "22033"}]},
+            },
+        ]
+        monkeypatch.setattr(
+            "vastly.instance.subprocess.run",
+            lambda *a, **kw: _make_api_response(*api_data),
+        )
+
+        results = sync_instances(_MINIMAL_CONFIG)
+
+        assert len(results) == 2
+        statuses = {r.status for r in results}
+        assert statuses == {"running", "stopped"}
+        running = [r for r in results if r.status == "running"]
+        stopped = [r for r in results if r.status == "stopped"]
+        assert running[0].id == 100
+        assert stopped[0].id == 200
+
+    def test_prunes_stale_aliases(self, monkeypatch):
+        self.aliases_file.write_text(
+            json.dumps({"100": "train", "999": "old"}), encoding="utf-8"
+        )
+
+        api_data = [
+            {
+                "id": 100,
+                "cur_state": "running",
+                "gpu_name": "RTX 4090",
+                "num_gpus": 1,
+                "dph_total": 0.45,
+                "public_ipaddr": "1.2.3.4",
+                "geolocation": "City, US",
+                "start_date": 1700000000.0,
+                "ports": {"22/tcp": [{"HostPort": "22022"}]},
+            },
+        ]
+        monkeypatch.setattr(
+            "vastly.instance.subprocess.run",
+            lambda *a, **kw: _make_api_response(*api_data),
+        )
+
+        results = sync_instances(_MINIMAL_CONFIG)
+
+        # train alias for existing instance 100 should survive
+        assert results[0].alias == "train"
+
+        # Stale alias for non-existent instance 999 should be pruned
+        saved = json.loads(self.aliases_file.read_text(encoding="utf-8"))
+        assert "100" in saved
+        assert "999" not in saved
+
+
+class TestCmdConnectIntegration:
+    """Integration tests for cmd_connect with mocked subprocess."""
+
+    def test_connect_happy_path_no_setup(self, monkeypatch):
+        from vastly.commands import cmd_connect
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._local_repo_info", lambda _: None)
+        monkeypatch.setattr(
+            "vastly.commands.sync_instances",
+            lambda _: [
+                _inst(
+                    name="1xRTX4090-US",
+                    id=12345,
+                    status="running",
+                    gpu_name="RTX 4090",
+                    dph_total=0.45,
+                    start_date=1700000000.0,
+                ),
+            ],
+        )
+
+        ide_calls = []
+        monkeypatch.setattr(
+            "vastly.commands.open_ide",
+            lambda ide, host, path: ide_calls.append((ide, host, path)),
+        )
+
+        args = argparse.Namespace(
+            command="connect",
+            name=None,
+            no_setup=False,
+            force_setup=False,
+            verbose=False,
+        )
+        cmd_connect(args)
+
+        assert len(ide_calls) == 1
+        assert ide_calls[0][1] == "1xRTX4090-US"
+
+
+class TestCmdStopIntegration:
+    """Integration tests for cmd_stop with mocked subprocess."""
+
+    def test_stop_single_instance(self, monkeypatch):
+        from vastly.commands import cmd_stop
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr(
+            "vastly.commands.get_synced_instances",
+            lambda _: [
+                _inst(name="1xRTX4090-US", id=12345, status="running"),
+            ],
+        )
+
+        action_calls = []
+        monkeypatch.setattr(
+            "vastly.commands._vastai_action",
+            lambda action, inst: action_calls.append((action, inst)),
+        )
+
+        args = argparse.Namespace(
+            command="stop", name=None, all=False, verbose=False
+        )
+        cmd_stop(args)
+
+        assert len(action_calls) == 1
+        assert action_calls[0][0] == "stop"
+        assert action_calls[0][1].id == 12345
+
+    def test_stop_named_instance(self, monkeypatch):
+        from vastly.commands import cmd_stop
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr(
+            "vastly.commands.get_synced_instances",
+            lambda _: [
+                _inst(name="1xRTX4090-US", id=100, status="running"),
+                _inst(name="test-gpu", id=200, status="running"),
+            ],
+        )
+
+        action_calls = []
+        monkeypatch.setattr(
+            "vastly.commands._vastai_action",
+            lambda action, inst: action_calls.append((action, inst)),
+        )
+
+        args = argparse.Namespace(
+            command="stop", name="test-gpu", all=False, verbose=False
+        )
+        cmd_stop(args)
+
+        assert len(action_calls) == 1
+        assert action_calls[0][0] == "stop"
+        assert action_calls[0][1].name == "test-gpu"
+        assert action_calls[0][1].id == 200
+
+
+class TestCmdSsh:
+    """Tests for cmd_ssh argument construction and behavior."""
+
+    def test_ssh_builds_correct_command(self, monkeypatch):
+        """cmd_ssh should build an SSH command with the right host and options."""
+        from vastly.commands import cmd_ssh
+
+        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr(
+            "vastly.commands.get_running_instances",
+            lambda _: [_inst(name="1xRTX4090-US", id=100)],
+        )
+
+        captured_cmd = []
+        # Force Windows path (subprocess.run) since os.execvp can't be tested in-process
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
+            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        )
+
+        args = argparse.Namespace(
+            command="ssh", name=None, verbose=False,
+        )
+        args.remote_cmd = []  # no remote command -- REMAINDER is empty list
+
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_ssh(args)
+        assert exc_info.value.code == 0
+
+        assert captured_cmd[0] == "ssh"
+        assert "1xRTX4090-US" in captured_cmd
+
+    def test_ssh_passes_remote_command(self, monkeypatch):
+        """cmd_ssh should append the remote command to the SSH invocation."""
+        from vastly.commands import cmd_ssh
+
+        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr(
+            "vastly.commands.get_running_instances",
+            lambda _: [_inst(name="gpu-box", id=1)],
+        )
+
+        captured_cmd = []
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
+            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        )
+
+        args = argparse.Namespace(
+            remote_cmd=["nvidia-smi"],  # REMAINDER captures as list
+            name=None,
+            verbose=False,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_ssh(args)
+        assert exc_info.value.code == 0
+
+        assert "nvidia-smi" in captured_cmd
+        assert "gpu-box" in captured_cmd
+
+    def test_ssh_selects_named_instance(self, monkeypatch):
+        """cmd_ssh should select the named instance when provided."""
+        from vastly.commands import cmd_ssh
+
+        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr(
+            "vastly.commands.get_running_instances",
+            lambda _: [
+                _inst(name="gpu-a", id=1),
+                _inst(name="gpu-b", id=2),
+            ],
+        )
+
+        captured_cmd = []
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
+            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        )
+
+        args = argparse.Namespace(
+            remote_cmd=[], name="gpu-b", verbose=False,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_ssh(args)
+        assert exc_info.value.code == 0
+
+        assert "gpu-b" in captured_cmd
+        assert "gpu-a" not in captured_cmd
+
+    def test_ssh_does_not_need_ide(self, monkeypatch):
+        """cmd_ssh should work without an IDE installed."""
+        from vastly.commands import cmd_ssh
+
+        # ssh and vastai available, but no IDE
+        def fake_which(cmd):
+            if cmd in ("ssh", "vastai"):
+                return f"/usr/bin/{cmd}"
+            return None  # code, cursor, git -- all missing
+
+        monkeypatch.setattr("vastly.commands.shutil.which", fake_which)
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr(
+            "vastly.commands.get_running_instances",
+            lambda _: [_inst(name="test", id=1)],
+        )
+
+        captured_cmd = []
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
+            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        )
+
+        args = argparse.Namespace(remote_cmd=[], name=None, verbose=False)
+
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_ssh(args)
+        assert exc_info.value.code == 0
+        assert "test" in captured_cmd
+
+    def test_ssh_smart_dispatch_unknown_name_becomes_command(self, monkeypatch):
+        """vst ssh nvidia-smi (no instance named nvidia-smi) -> runs nvidia-smi."""
+        from vastly.commands import cmd_ssh
+
+        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr(
+            "vastly.commands.get_running_instances",
+            lambda _: [_inst(name="gpu-box", id=1)],
+        )
+
+        captured_cmd = []
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
+            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        )
+
+        # name="nvidia-smi" doesn't match any instance, so it should be
+        # treated as a remote command on the auto-selected instance
+        args = argparse.Namespace(
+            remote_cmd=[], name="nvidia-smi", verbose=False,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_ssh(args)
+        assert exc_info.value.code == 0
+
+        assert "gpu-box" in captured_cmd
+        assert "nvidia-smi" in captured_cmd
+
+    def test_ssh_smart_dispatch_name_plus_command(self, monkeypatch):
+        """vst ssh train nvidia-smi -> runs nvidia-smi on 'train' instance."""
+        from vastly.commands import cmd_ssh
+
+        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr(
+            "vastly.commands.get_running_instances",
+            lambda _: [
+                _inst(name="gpu-a", id=1, alias="train"),
+                _inst(name="gpu-b", id=2),
+            ],
+        )
+
+        captured_cmd = []
+        monkeypatch.setattr("sys.platform", "win32")
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
+            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        )
+
+        args = argparse.Namespace(
+            remote_cmd=["nvidia-smi"], name="train", verbose=False,
+        )
+
+        with pytest.raises(SystemExit) as exc_info:
+            cmd_ssh(args)
+        assert exc_info.value.code == 0
+
+        assert "gpu-a" in captured_cmd
+        assert "nvidia-smi" in captured_cmd
+
+    def test_ssh_alias_reserved(self):
+        """'ssh' should be a reserved alias name."""
+        instances = [_inst(name="1xRTX4090-TW", id=100)]
+        with pytest.raises(VastlyError, match="reserved"):
+            validate_alias("ssh", instances, {})

@@ -8,9 +8,14 @@ import subprocess
 import time
 from importlib import resources
 from pathlib import Path, PurePosixPath
-
 from vastly import __version__, cyan, green, red, yellow
+from vastly.config import Config
+from vastly.instance import Instance
 from vastly.ssh import run_scp, run_ssh
+
+# These paths must match setup-remote.sh -- keep in sync
+REMOTE_MARKER_DIR = "~/.vastly/setup"
+REMOTE_MARKER_PATTERN = "~/.vastly/setup/{repo_name}.json"
 
 
 def _check_repo_mismatch(repo_name: str, setup_files: list[str]) -> list[str]:
@@ -26,10 +31,10 @@ def _check_repo_mismatch(repo_name: str, setup_files: list[str]) -> list[str]:
 
 
 def setup_instances(
-    instances: list[dict],
+    instances: list[Instance],
     repo_url: str,
     repo_name: str,
-    config: dict,
+    config: Config,
     *,
     force_setup: bool = False,
     project_dir: Path | None = None,
@@ -61,7 +66,7 @@ def setup_instances(
     https_warned = False
 
     for inst in instances:
-        name = inst["name"]
+        name = inst.name
         print(f"  {name}: ", end="", flush=True)
 
         # Combined reachability + marker + listing probe in a single SSH connection.
@@ -69,15 +74,15 @@ def setup_instances(
         # "|| true" ensures exit 0 whenever SSH connects (even if file/dir is missing).
         if force_setup:
             marker_cmd = (
-                f"rm -f ~/.vastly/setup/{q_repo}.json; "
+                f"rm -f {REMOTE_MARKER_DIR}/{q_repo}.json; "
                 f"printf '\\n{sep}\\n'; "
-                f"ls ~/.vastly/setup/ 2>/dev/null || true"
+                f"ls {REMOTE_MARKER_DIR}/ 2>/dev/null || true"
             )
         else:
             marker_cmd = (
-                f"cat ~/.vastly/setup/{q_repo}.json 2>/dev/null || true; "
+                f"cat {REMOTE_MARKER_DIR}/{q_repo}.json 2>/dev/null || true; "
                 f"printf '\\n{sep}\\n'; "
-                f"ls ~/.vastly/setup/ 2>/dev/null || true"
+                f"ls {REMOTE_MARKER_DIR}/ 2>/dev/null || true"
             )
 
         reachable = False
@@ -217,5 +222,11 @@ def setup_instances(
 
         print(green(f"  {name}: done."))
         success_names.append(name)
+
+    # Summary line for partial success
+    total = len(instances)
+    ok = len(success_names)
+    if total > 1 and ok < total:
+        print(yellow(f"Setup: {ok}/{total} instances ready."))
 
     return success_names

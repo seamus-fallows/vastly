@@ -6,6 +6,9 @@ set -euo pipefail
 # Receives config as positional arguments from the vastly CLI.
 # Safe to re-run (idempotent).
 
+# These paths are shared with src/vastly/remote.py -- keep in sync
+# MARKER_DIR="$HOME/.vastly/setup"
+
 # ── Arguments ───────────────────────────────────────────────────────────
 
 REPO_URL="${1:?Usage: setup-remote.sh <repo_url> <repo_name> <git_name> <git_email> <workspace> <disable_auto_tmux> <install_command> <module_version> [post_install_commands...]}"

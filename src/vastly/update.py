@@ -30,7 +30,7 @@ def _parse_version(v: str) -> tuple[int, ...]:
             else:
                 break
         parts.append(int(digits) if digits else 0)
-    return tuple(parts)
+    return tuple(parts[:3])
 
 
 def check_for_update() -> None:
