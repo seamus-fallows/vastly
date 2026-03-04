@@ -3007,7 +3007,7 @@ class TestCmdSsh:
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
-            "vastly.commands.get_running_instances",
+            "vastly.commands.sync_instances",
             lambda _: [_inst(name="1xRTX4090-US", id=100)],
         )
 
@@ -3040,7 +3040,7 @@ class TestCmdSsh:
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
-            "vastly.commands.get_running_instances",
+            "vastly.commands.sync_instances",
             lambda _: [_inst(name="gpu-box", id=1)],
         )
 
@@ -3073,7 +3073,7 @@ class TestCmdSsh:
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
-            "vastly.commands.get_running_instances",
+            "vastly.commands.sync_instances",
             lambda _: [
                 _inst(name="gpu-a", id=1),
                 _inst(name="gpu-b", id=2),
@@ -3113,7 +3113,7 @@ class TestCmdSsh:
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
-            "vastly.commands.get_running_instances",
+            "vastly.commands.sync_instances",
             lambda _: [_inst(name="test", id=1)],
         )
 
@@ -3140,7 +3140,7 @@ class TestCmdSsh:
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
-            "vastly.commands.get_running_instances",
+            "vastly.commands.sync_instances",
             lambda _: [_inst(name="gpu-box", id=1)],
         )
 
@@ -3173,7 +3173,7 @@ class TestCmdSsh:
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
-            "vastly.commands.get_running_instances",
+            "vastly.commands.sync_instances",
             lambda _: [
                 _inst(name="gpu-a", id=1, alias="train"),
                 _inst(name="gpu-b", id=2),

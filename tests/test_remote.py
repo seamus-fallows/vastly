@@ -6,7 +6,18 @@ import subprocess
 
 import pytest
 
+from vastly.instance import Instance
 from vastly.remote import setup_instances
+
+_SEP = "__VASTLY_SEP__"
+
+
+def _inst(name="gpu-1"):
+    """Create a minimal Instance for testing."""
+    return Instance(
+        name=name, id=1, dph_total=0.50, gpu_name="RTX 4090",
+        num_gpus=1, start_date=None, cached=False, status="running", alias=None,
+    )
 
 
 class TestSetupInstances:
@@ -32,23 +43,32 @@ class TestSetupInstances:
         self._git_responses = git_responses
 
     def _make_ssh_mock(self, *, reachable=True, already_setup=False, setup_rc=0):
-        """Build a run_ssh mock with configurable behavior."""
+        """Build a run_ssh mock with configurable behavior.
+
+        The probe command contains 'cat ...json' + separator + 'ls ...' in one call.
+        already_setup=True returns valid JSON before the separator.
+        reachable=False returns non-zero for the probe.
+        """
 
         def mock(host, command, **kwargs):
-            if "echo ok" in command:
-                rc = 0 if reachable else 255
-                return subprocess.CompletedProcess(
-                    [], rc, stdout="ok\n" if rc == 0 else "", stderr=""
-                )
-            if "test -f" in command and "echo done" in command:
+            # Combined probe: cat marker + separator + ls setup dir
+            if _SEP in command:
+                if not reachable:
+                    return subprocess.CompletedProcess([], 255, stdout="", stderr="")
                 if already_setup:
+                    marker = '{"timestamp": "2024-01-01"}'
                     return subprocess.CompletedProcess(
-                        [], 0, stdout="done\n", stderr=""
+                        [], 0,
+                        stdout=f"{marker}\n{_SEP}\nr.json\n",
+                        stderr="",
                     )
-                return subprocess.CompletedProcess([], 1, stdout="", stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=f"\n{_SEP}\n\n", stderr=""
+                )
+            # Force-setup rm command
             if command.startswith("rm -f"):
                 return subprocess.CompletedProcess([], 0, stdout="", stderr="")
-            # setup command or anything else
+            # Setup script execution or other commands
             return subprocess.CompletedProcess([], setup_rc, stdout="", stderr="")
 
         return mock
@@ -73,7 +93,7 @@ class TestSetupInstances:
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         result = setup_instances(
-            [{"name": "gpu-1"}], "git@github.com:u/r.git", "r", self._base_config()
+            [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
         assert result == ["gpu-1"]
 
@@ -83,7 +103,7 @@ class TestSetupInstances:
         )
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         result = setup_instances(
-            [{"name": "gpu-1"}], "git@github.com:u/r.git", "r", self._base_config()
+            [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
         assert result == []
 
@@ -93,7 +113,7 @@ class TestSetupInstances:
         )
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         result = setup_instances(
-            [{"name": "gpu-1"}], "git@github.com:u/r.git", "r", self._base_config()
+            [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
         assert result == ["gpu-1"]
 
@@ -108,7 +128,7 @@ class TestSetupInstances:
         monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         setup_instances(
-            [{"name": "gpu-1"}],
+            [_inst("gpu-1")],
             "git@github.com:u/r.git",
             "r",
             self._base_config(),
@@ -121,7 +141,7 @@ class TestSetupInstances:
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         result = setup_instances(
-            [{"name": "gpu-1"}], "git@github.com:u/r.git", "r", self._base_config()
+            [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
         assert result == []
 
@@ -129,7 +149,7 @@ class TestSetupInstances:
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock(success=False))
         result = setup_instances(
-            [{"name": "gpu-1"}], "git@github.com:u/r.git", "r", self._base_config()
+            [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
         assert result == []
 
@@ -137,24 +157,24 @@ class TestSetupInstances:
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock(setup_rc=1))
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         result = setup_instances(
-            [{"name": "gpu-1"}], "git@github.com:u/r.git", "r", self._base_config()
+            [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
         assert result == []
 
     def test_multiple_instances_mixed_results(self, monkeypatch):
         def mixed_ssh(host, command, **kwargs):
-            if "echo ok" in command:
+            if _SEP in command:
                 if host == "fail-gpu":
                     return subprocess.CompletedProcess([], 255, stdout="", stderr="")
-                return subprocess.CompletedProcess([], 0, stdout="ok\n", stderr="")
-            if "test -f" in command:
-                return subprocess.CompletedProcess([], 1, stdout="", stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=f"\n{_SEP}\n\n", stderr=""
+                )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", mixed_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         result = setup_instances(
-            [{"name": "ok-gpu"}, {"name": "fail-gpu"}],
+            [_inst("ok-gpu"), _inst("fail-gpu")],
             "git@github.com:u/r.git",
             "r",
             self._base_config(),
@@ -173,7 +193,7 @@ class TestSetupInstances:
         monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         config = {**self._base_config(), "postInstall": ["pip install black"]}
-        setup_instances([{"name": "gpu-1"}], "git@github.com:u/r.git", "r", config)
+        setup_instances([_inst("gpu-1")], "git@github.com:u/r.git", "r", config)
         assert setup_cmds
         assert "pip install black" in setup_cmds[0]
 
@@ -190,7 +210,7 @@ class TestSetupInstances:
         monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         setup_instances(
-            [{"name": "gpu-1"}], "git@github.com:u/r.git", "r", self._base_config()
+            [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
         assert setup_cmds
         assert "auto" in setup_cmds[0]
@@ -208,11 +228,11 @@ class TestSetupInstances:
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
         # disableAutoTmux: True -> "true"
         setup_instances(
-            [{"name": "gpu-1"}], "git@github.com:u/r.git", "r", self._base_config()
+            [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
         assert "true" in setup_cmds[0]
         # disableAutoTmux: False -> "false"
         setup_cmds.clear()
         config = {**self._base_config(), "disableAutoTmux": False}
-        setup_instances([{"name": "gpu-1"}], "git@github.com:u/r.git", "r", config)
+        setup_instances([_inst("gpu-1")], "git@github.com:u/r.git", "r", config)
         assert "false" in setup_cmds[0]

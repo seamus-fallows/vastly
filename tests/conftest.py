@@ -42,6 +42,7 @@ def make_config():
             "gitRemote": "origin",
             "postInstall": [],
             "installCommand": None,
+            "copyFiles": [],
         }
         base.update(overrides)
         return base

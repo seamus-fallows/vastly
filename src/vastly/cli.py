@@ -26,12 +26,13 @@ from vastly.errors import VastlyError
 
 _CMD_HELP = {
     "connect": {
-        "usage": "vst [name] [-n | -f]",
+        "usage": "vst [name] [-n | -f] [--all]",
         "desc": "Connect to an instance and open your IDE.",
         "detail": "First visit: clones your repo, installs deps. Revisits: skips straight to IDE.",
         "examples": [
             ("vst", "auto-select and connect"),
             ("vst train", "connect by alias"),
+            ("vst --all", "connect to all instances"),
             ("vst -f", "force re-run setup"),
         ],
     },
@@ -192,6 +193,7 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
     parser = argparse.ArgumentParser(prog="vst", add_help=False)
     parser.add_argument("--version", action="version", version=f"vastly {__version__}")
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--all", action="store_true", help=argparse.SUPPRESS)
     g_top = parser.add_mutually_exclusive_group()
     g_top.add_argument("-n", "--no-setup", action="store_true")
     g_top.add_argument("-f", "--force-setup", action="store_true")
@@ -202,6 +204,7 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
     # Connect (default when no subcommand given)
     p = subparsers.add_parser("connect", help="connect to an instance and open IDE")
     p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
+    p.add_argument("--all", action="store_true", help="connect to all instances")
     p.add_argument("-v", "--verbose", action="store_true")
     g = p.add_mutually_exclusive_group()
     g.add_argument(
@@ -323,6 +326,8 @@ def main(argv: list[str] | None = None) -> None:
         args.force_setup = True
     if "-n" in raw or "--no-setup" in raw:
         args.no_setup = True
+    if "--all" in raw:
+        args.all = True
 
     if args.verbose:
         vastly.VERBOSE = True

@@ -60,7 +60,7 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(scope="module")
 def synced_instances():
     """Sync instances once for the whole module. Skip if none available."""
-    config = {**DEFAULTS}
+    config = {**DEFAULTS, "copyFiles": []}
     result = sync_instances(config)
     if not result:
         pytest.skip("No running instances available")
@@ -69,11 +69,11 @@ def synced_instances():
 
 @pytest.fixture(scope="module")
 def live_instance(synced_instances):
-    """Return the first non-cached instance, or skip."""
+    """Return the first running non-cached instance, or skip."""
     for inst in synced_instances:
-        if not inst.get("cached"):
+        if not inst.cached and inst.status == "running":
             return inst
-    pytest.skip("No live (non-cached) instances available")
+    pytest.skip("No live running instances available")
 
 
 @pytest.fixture(scope="module")
@@ -122,16 +122,16 @@ class TestSSHConnectivity:
     """Verify SSH works through the generated configs."""
 
     def test_ssh_echo(self, live_instance):
-        result = run_ssh(live_instance["name"], "echo ok")
+        result = run_ssh(live_instance.name, "echo ok")
         assert result.returncode == 0
         assert result.stdout.strip() == "ok"
 
     def test_ssh_config_file_exists(self, live_instance):
         names = cached_config_names()
-        assert live_instance["name"] in names
+        assert live_instance.name in names
 
     def test_ssh_environment_has_basic_tools(self, live_instance):
-        result = run_ssh(live_instance["name"], "which bash && which cat")
+        result = run_ssh(live_instance.name, "which bash && which cat")
         assert result.returncode == 0
 
 
@@ -144,15 +144,15 @@ class TestRemoteEnvironment:
     """Verify the remote instance has expected tools and paths."""
 
     def test_python_available(self, live_instance):
-        result = run_ssh(live_instance["name"], "which python3 || which python")
+        result = run_ssh(live_instance.name, "which python3 || which python")
         assert result.returncode == 0
 
     def test_git_available(self, live_instance):
-        result = run_ssh(live_instance["name"], "which git")
+        result = run_ssh(live_instance.name, "which git")
         assert result.returncode == 0
 
     def test_workspace_creatable(self, live_instance):
-        result = run_ssh(live_instance["name"], "mkdir -p /workspace && echo ok")
+        result = run_ssh(live_instance.name, "mkdir -p /workspace && echo ok")
         assert result.returncode == 0
         assert result.stdout.strip() == "ok"
 
@@ -179,20 +179,20 @@ class TestRemoteSetup:
         from vastly.remote import setup_instances
 
         repo_url, repo_name = test_repo
-        config = {**DEFAULTS, "postInstall": []}
+        config = {**DEFAULTS, "postInstall": [], "copyFiles": []}
 
         result = setup_instances(
             [live_instance], repo_url, repo_name, config, force_setup=True
         )
-        assert live_instance["name"] in result, (
-            f"Setup failed for {live_instance['name']}"
+        assert live_instance.name in result, (
+            f"Setup failed for {live_instance.name}"
         )
 
     def test_marker_file_written(self, live_instance, test_repo):
         """After setup, the marker JSON should exist and be valid."""
         _, repo_name = test_repo
         result = run_ssh(
-            live_instance["name"],
+            live_instance.name,
             f"cat ~/.vastly/setup/{repo_name}.json",
         )
         assert result.returncode == 0
@@ -204,28 +204,28 @@ class TestRemoteSetup:
     def test_repo_cloned(self, live_instance, test_repo):
         _, repo_name = test_repo
         result = run_ssh(
-            live_instance["name"],
+            live_instance.name,
             f"test -d /workspace/{repo_name}/.git && echo ok",
         )
         assert result.stdout.strip() == "ok"
 
     def test_git_identity_configured(self, live_instance):
-        name_result = run_ssh(live_instance["name"], "git config --global user.name")
+        name_result = run_ssh(live_instance.name, "git config --global user.name")
         assert name_result.returncode == 0
         assert name_result.stdout.strip(), "git user.name should not be empty"
 
-        email_result = run_ssh(live_instance["name"], "git config --global user.email")
+        email_result = run_ssh(live_instance.name, "git config --global user.email")
         assert email_result.returncode == 0
         assert email_result.stdout.strip(), "git user.email should not be empty"
 
     def test_bashrc_has_vastly_managed_lines(self, live_instance):
-        result = run_ssh(live_instance["name"], "grep 'vastly-managed' ~/.bashrc")
+        result = run_ssh(live_instance.name, "grep 'vastly-managed' ~/.bashrc")
         assert result.returncode == 0, "~/.bashrc should contain vastly-managed lines"
 
     def test_vscode_settings_written(self, live_instance, test_repo):
         _, repo_name = test_repo
         result = run_ssh(
-            live_instance["name"],
+            live_instance.name,
             f"cat /workspace/{repo_name}/.vscode/settings.json",
         )
         assert result.returncode == 0
@@ -237,10 +237,10 @@ class TestRemoteSetup:
         from vastly.remote import setup_instances
 
         repo_url, repo_name = test_repo
-        config = {**DEFAULTS, "postInstall": []}
+        config = {**DEFAULTS, "postInstall": [], "copyFiles": []}
 
         result = setup_instances([live_instance], repo_url, repo_name, config)
-        assert live_instance["name"] in result
+        assert live_instance.name in result
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +254,7 @@ class TestPortForwarding:
     def test_ssh_config_contains_local_forward(self, live_instance):
         from vastly.ssh import SSH_CONFIG_DIR
 
-        config_file = SSH_CONFIG_DIR / live_instance["name"]
+        config_file = SSH_CONFIG_DIR / live_instance.name
         if not config_file.exists():
             pytest.skip("SSH config file not found")
         content = config_file.read_text()

@@ -1,4 +1,4 @@
-"""Tests for vastly.cli -- prerequisites, repo info, and argument parsing."""
+"""Tests for vastly CLI -- prerequisites, repo info, and argument parsing."""
 
 from __future__ import annotations
 
@@ -7,77 +7,80 @@ from unittest.mock import patch
 
 import pytest
 
-from vastly.cli import _check_prerequisites, _local_repo_info, main
+from vastly.cli import main
+from vastly.commands import _check_prerequisites, _local_repo_info
+from vastly.errors import VastlyError
 
 
 class TestCheckPrerequisites:
     def test_all_tools_present(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-        monkeypatch.setattr("vastly.cli.check_ide", lambda x: True)
-        assert _check_prerequisites(need_ide=True, ide="code") is True
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: True)
+        _check_prerequisites(need_ide=True, ide="code")  # should not raise
 
-    def test_missing_vastai(self, monkeypatch, capsys):
+    def test_missing_vastai(self, monkeypatch):
         monkeypatch.setattr(
             "shutil.which", lambda x: None if x == "vastai" else f"/usr/bin/{x}"
         )
-        monkeypatch.setattr("vastly.cli.check_ide", lambda x: True)
-        assert _check_prerequisites(need_ide=True, ide="code") is False
-        assert "vastai" in capsys.readouterr().out
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: True)
+        with pytest.raises(VastlyError, match="vastai"):
+            _check_prerequisites(need_ide=True, ide="code")
 
-    def test_missing_git(self, monkeypatch, capsys):
+    def test_missing_git(self, monkeypatch):
         monkeypatch.setattr(
             "shutil.which", lambda x: None if x == "git" else f"/usr/bin/{x}"
         )
-        monkeypatch.setattr("vastly.cli.check_ide", lambda x: True)
-        assert _check_prerequisites(need_ide=True, ide="code") is False
-        out = capsys.readouterr().out
-        assert "git" in out
-        assert "git-scm.com" in out
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: True)
+        with pytest.raises(VastlyError, match="git") as exc_info:
+            _check_prerequisites(need_ide=True, ide="code")
+        assert "git-scm.com" in str(exc_info.value)
 
-    def test_missing_ssh(self, monkeypatch, capsys):
+    def test_missing_ssh(self, monkeypatch):
         monkeypatch.setattr(
             "shutil.which", lambda x: None if x == "ssh" else f"/usr/bin/{x}"
         )
-        monkeypatch.setattr("vastly.cli.check_ide", lambda x: True)
-        assert _check_prerequisites(need_ide=True, ide="code") is False
-        assert "ssh" in capsys.readouterr().out.lower()
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: True)
+        with pytest.raises(VastlyError, match="(?i)ssh"):
+            _check_prerequisites(need_ide=True, ide="code")
 
-    def test_missing_ide_when_needed(self, monkeypatch, capsys):
+    def test_missing_ide_when_needed(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-        monkeypatch.setattr("vastly.cli.check_ide", lambda x: False)
-        assert _check_prerequisites(need_ide=True, ide="code") is False
-        assert "code" in capsys.readouterr().out
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: False)
+        with pytest.raises(VastlyError, match="code"):
+            _check_prerequisites(need_ide=True, ide="code")
 
     def test_skips_ide_check_when_not_needed(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
         # check_ide returns False, but need_ide=False so it's never called
-        monkeypatch.setattr("vastly.cli.check_ide", lambda x: False)
-        assert _check_prerequisites(need_ide=False, ide="code") is True
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: False)
+        _check_prerequisites(need_ide=False, ide="code")  # should not raise
 
-    def test_reports_all_missing_tools_at_once(self, monkeypatch, capsys):
+    def test_reports_all_missing_tools_at_once(self, monkeypatch):
         """No short-circuit -- all missing tools are reported in one pass."""
         monkeypatch.setattr("shutil.which", lambda x: None)
-        monkeypatch.setattr("vastly.cli.check_ide", lambda x: False)
-        _check_prerequisites(need_ide=True, ide="code")
-        out = capsys.readouterr().out
-        assert "vastai" in out
-        assert "git" in out
-        assert "ssh" in out.lower()
-        assert "code" in out
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: False)
+        with pytest.raises(VastlyError) as exc_info:
+            _check_prerequisites(need_ide=True, ide="code")
+        msg = str(exc_info.value)
+        assert "vastai" in msg
+        assert "git" in msg
+        assert "ssh" in msg.lower()
+        assert "code" in msg
 
-    def test_known_ide_includes_download_url(self, monkeypatch, capsys):
+    def test_known_ide_includes_download_url(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-        monkeypatch.setattr("vastly.cli.check_ide", lambda x: False)
-        _check_prerequisites(need_ide=True, ide="cursor")
-        assert "cursor.com" in capsys.readouterr().out
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: False)
+        with pytest.raises(VastlyError, match="cursor.com"):
+            _check_prerequisites(need_ide=True, ide="cursor")
 
-    def test_unknown_ide_omits_url(self, monkeypatch, capsys):
+    def test_unknown_ide_omits_url(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-        monkeypatch.setattr("vastly.cli.check_ide", lambda x: False)
-        _check_prerequisites(need_ide=True, ide="zed")
-        out = capsys.readouterr().out
-        assert "zed" in out
-        assert "Download from" not in out
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: False)
+        with pytest.raises(VastlyError) as exc_info:
+            _check_prerequisites(need_ide=True, ide="zed")
+        msg = str(exc_info.value)
+        assert "zed" in msg
+        assert "Download from" not in msg
 
 
 class TestLocalRepoInfo:
@@ -108,7 +111,7 @@ class TestLocalRepoInfo:
             ),
         )
         assert _local_repo_info("upstream") is None
-        assert "No such remote" in capsys.readouterr().out
+        assert "No such remote" in capsys.readouterr().err
 
     def test_suppresses_not_a_git_repo_message(self, monkeypatch, capsys):
         monkeypatch.setattr(
@@ -121,7 +124,9 @@ class TestLocalRepoInfo:
             ),
         )
         _local_repo_info("origin")
-        assert capsys.readouterr().out == ""
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert captured.err == ""
 
     def test_returns_none_on_empty_stdout(self, monkeypatch):
         monkeypatch.setattr(
@@ -163,54 +168,53 @@ class TestLocalRepoInfo:
 
 
 class TestMainArgParsing:
-    def test_default_args(self, monkeypatch):
-        monkeypatch.setattr("sys.argv", ["vst"])
-        with patch("vastly.cli._connect") as mock_connect:
-            main()
-        mock_connect.assert_called_once_with(
-            None, no_setup=False, force_setup=False, list_only=False
-        )
+    """Test the subcommand argument parsing in main()."""
 
-    def test_positional_name(self, monkeypatch):
-        monkeypatch.setattr("sys.argv", ["vst", "my-instance"])
-        with patch("vastly.cli._connect") as mock_connect:
-            main()
-        mock_connect.assert_called_once_with(
-            "my-instance", no_setup=False, force_setup=False, list_only=False
-        )
+    def test_bare_vst_dispatches_to_connect(self):
+        with patch("vastly.cli.cmd_connect") as mock:
+            main(argv=[])
+        args = mock.call_args[0][0]
+        assert args.command == "connect"
+        assert args.name is None
 
-    def test_list_flag(self, monkeypatch):
-        monkeypatch.setattr("sys.argv", ["vst", "--list"])
-        with patch("vastly.cli._connect") as mock_connect:
-            main()
-        mock_connect.assert_called_once_with(
-            None, no_setup=False, force_setup=False, list_only=True
-        )
+    def test_unknown_name_becomes_connect(self):
+        with patch("vastly.cli.cmd_connect") as mock:
+            main(argv=["my-instance"])
+        args = mock.call_args[0][0]
+        assert args.command == "connect"
+        assert args.name == "my-instance"
 
-    def test_no_setup_flag(self, monkeypatch):
-        monkeypatch.setattr("sys.argv", ["vst", "--no-setup"])
-        with patch("vastly.cli._connect") as mock_connect:
-            main()
-        mock_connect.assert_called_once_with(
-            None, no_setup=True, force_setup=False, list_only=False
-        )
+    def test_list_subcommand(self):
+        with patch("vastly.cli.cmd_list") as mock:
+            main(argv=["list"])
+        mock.assert_called_once()
 
-    def test_force_setup_flag(self, monkeypatch):
-        monkeypatch.setattr("sys.argv", ["vst", "--force-setup"])
-        with patch("vastly.cli._connect") as mock_connect:
-            main()
-        mock_connect.assert_called_once_with(
-            None, no_setup=False, force_setup=True, list_only=False
-        )
+    def test_no_setup_flag(self):
+        with patch("vastly.cli.cmd_connect") as mock:
+            main(argv=["-n"])
+        args = mock.call_args[0][0]
+        assert args.no_setup is True
 
-    def test_no_setup_and_force_setup_are_mutually_exclusive(self, monkeypatch):
-        monkeypatch.setattr("sys.argv", ["vst", "--no-setup", "--force-setup"])
+    def test_force_setup_flag(self):
+        with patch("vastly.cli.cmd_connect") as mock:
+            main(argv=["-f"])
+        args = mock.call_args[0][0]
+        assert args.force_setup is True
+
+    def test_no_setup_and_force_setup_are_mutually_exclusive(self):
         with pytest.raises(SystemExit):
-            main()
+            main(argv=["-n", "-f"])
 
-    def test_version_flag(self, monkeypatch, capsys):
-        monkeypatch.setattr("sys.argv", ["vst", "--version"])
+    def test_version_flag(self, capsys):
         with pytest.raises(SystemExit) as exc_info:
-            main()
+            main(argv=["--version"])
         assert exc_info.value.code == 0
         assert "vastly" in capsys.readouterr().out
+
+    def test_verbose_flag_sets_global(self, monkeypatch):
+        import vastly
+
+        monkeypatch.setattr(vastly, "VERBOSE", False)
+        with patch("vastly.cli.cmd_list"):
+            main(argv=["-v", "list"])
+        assert vastly.VERBOSE is True

@@ -213,7 +213,7 @@ def cmd_connect(args: argparse.Namespace) -> None:
     running = [i for i in all_instances if i.status == "running"]
 
     if not running:
-        # Auto-start a stopped instance instead of erroring
+        # Auto-start stopped instance(s) instead of erroring
         startable = [i for i in all_instances if i.status in STOPPED_STATES]
 
         if args.name:
@@ -223,7 +223,7 @@ def cmd_connect(args: argparse.Namespace) -> None:
                 if i.name == args.name or i.alias == args.name
             ]
             if match:
-                inst = match[0]
+                to_start = [match[0]]
             else:
                 match_all = [
                     i
@@ -237,16 +237,21 @@ def cmd_connect(args: argparse.Namespace) -> None:
                 raise VastlyError(f"No instance named '{args.name}'.")
         elif not startable:
             raise VastlyError("No Vast instances found.")
+        elif getattr(args, "all", False):
+            print(yellow(f"  No running instances. Starting all {len(startable)}..."))
+            to_start = startable
         elif len(startable) == 1:
-            inst = startable[0]
-            print(yellow(f"  No running instances. Starting {inst.display_name}..."))
+            to_start = [startable[0]]
+            print(yellow(f"  No running instances. Starting {to_start[0].display_name}..."))
         else:
             print(yellow("  No running instances. Select one to start:"))
             show_table(startable)
-            inst = select_instance(startable)[0]
+            to_start = [select_instance(startable)[0]]
 
-        _vastai_action("start", inst)
-        _poll_for_running(str(inst.id))
+        for inst in to_start:
+            _vastai_action("start", inst)
+        for inst in to_start:
+            _poll_for_running(str(inst.id))
 
         # Re-sync for fresh SSH configs
         all_instances = sync_instances(config)
@@ -274,7 +279,10 @@ def cmd_connect(args: argparse.Namespace) -> None:
                     f"'{args.name}' is {match_all[0].status}. Use 'vst start {args.name}' to start it."
                 )
 
-    selected = select_instance(running, args.name, allow_all=True)
+    if getattr(args, "all", False):
+        selected = running
+    else:
+        selected = select_instance(running, args.name, allow_all=True)
     vastly.verbose(f"Selected {len(selected)} instance(s) for connect")
 
     repo_info = _local_repo_info(config["gitRemote"])
@@ -660,27 +668,51 @@ def cmd_ssh(args: argparse.Namespace) -> None:
     if not shutil.which("vastai"):
         raise VastlyError("Missing: vastai CLI. Install with: pip install vastai")
 
-    instances = get_running_instances(config)
+    all_instances = sync_instances(config)
+    running = [i for i in all_instances if i.status == "running"]
 
-    # Smart dispatch: if args.name doesn't match any instance, treat it as a
-    # remote command.  e.g. `vst ssh nvidia-smi` runs nvidia-smi on the
-    # auto-selected instance (same pattern as `vst train` -> `vst connect train`).
+    if not running:
+        stopped = [i for i in all_instances if i.status != "running"]
+        if stopped:
+            raise VastlyError(
+                f"No running instances. {len(stopped)} stopped/exited. "
+                "Use 'vst list' to see all, 'vst start' to restart."
+            )
+        raise VastlyError("No Vast instances found.")
+
+    # Smart dispatch: if args.name doesn't match any running instance, check
+    # stopped instances (for a helpful error) before falling back to treating
+    # it as a remote command.
     remote_cmd = list(args.remote_cmd) if args.remote_cmd else []
     if args.name:
-        match = [i for i in instances if i.name == args.name or i.alias == args.name]
+        match = [i for i in running if i.name == args.name or i.alias == args.name]
         if match:
             inst = match[0]
         else:
+            # Check if name matches a non-running instance
+            match_all = [
+                i for i in all_instances
+                if i.name == args.name or i.alias == args.name
+            ]
+            if match_all:
+                raise VastlyError(
+                    f"'{args.name}' is {match_all[0].status}. "
+                    f"Use 'vst start {args.name}' to start it."
+                )
+            # No match at all -- treat as remote command
             remote_cmd = [args.name] + remote_cmd
-            inst = select_instance(instances)[0]
+            inst = select_instance(running)[0]
     else:
-        inst = select_instance(instances)[0]
+        inst = select_instance(running)[0]
 
     ssh_cmd = ["ssh", *SSH_OPTS, inst.name]
     if remote_cmd:
         ssh_cmd.extend(remote_cmd)
 
     vastly.verbose(f"ssh command: {' '.join(ssh_cmd)}")
+
+    # Flush stdout before handing off to subprocess so output ordering is correct
+    sys.stdout.flush()
 
     # On Unix, replace the process entirely so Ctrl+C, terminal resizing, etc.
     # work natively. On Windows, subprocess is the only option.

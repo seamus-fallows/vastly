@@ -6,12 +6,29 @@ import subprocess
 
 import pytest
 
+from vastly.errors import APIError, VastlyError
 from vastly.instance import (
+    Instance,
     fetch_instances,
     get_synced_instances,
     show_table,
     sync_instances,
 )
+
+
+def _inst(name="test", id=1, **kwargs):
+    """Helper to create Instance objects with sensible defaults."""
+    return Instance(
+        name=kwargs.pop("name", name),
+        id=kwargs.pop("id", id),
+        dph_total=kwargs.pop("dph_total", 0.50),
+        gpu_name=kwargs.pop("gpu_name", "RTX 4090"),
+        num_gpus=kwargs.pop("num_gpus", 1),
+        start_date=kwargs.pop("start_date", None),
+        cached=kwargs.pop("cached", False),
+        status=kwargs.pop("status", "running"),
+        alias=kwargs.pop("alias", None),
+    )
 
 
 class TestFetchInstances:
@@ -24,41 +41,43 @@ class TestFetchInstances:
         )
         assert fetch_instances() == [{"id": 1}]
 
-    def test_returns_none_on_nonzero_exit_with_stderr(self, monkeypatch, capsys):
+    def test_raises_on_nonzero_exit_with_stderr(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
             lambda *a, **kw: subprocess.CompletedProcess(
                 a[0], 1, stdout="", stderr="auth error"
             ),
         )
-        assert fetch_instances() is None
-        assert "auth error" in capsys.readouterr().out
+        with pytest.raises(APIError, match="auth error"):
+            fetch_instances()
 
-    def test_prints_api_key_hint_when_stderr_empty(self, monkeypatch, capsys):
+    def test_raises_api_key_hint_when_stderr_empty(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
             lambda *a, **kw: subprocess.CompletedProcess(a[0], 1, stdout="", stderr=""),
         )
-        fetch_instances()
-        assert "API key" in capsys.readouterr().out
+        with pytest.raises(APIError, match="API key"):
+            fetch_instances()
 
-    def test_returns_none_on_invalid_json(self, monkeypatch):
+    def test_raises_on_invalid_json(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
             lambda *a, **kw: subprocess.CompletedProcess(
                 a[0], 0, stdout="not json", stderr=""
             ),
         )
-        assert fetch_instances() is None
+        with pytest.raises(APIError, match="invalid data"):
+            fetch_instances()
 
-    def test_returns_none_when_json_is_object(self, monkeypatch):
+    def test_raises_when_json_is_object(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
             lambda *a, **kw: subprocess.CompletedProcess(
                 a[0], 0, stdout='{"error": "msg"}', stderr=""
             ),
         )
-        assert fetch_instances() is None
+        with pytest.raises(APIError, match="invalid data"):
+            fetch_instances()
 
     def test_returns_empty_list(self, monkeypatch):
         monkeypatch.setattr(
@@ -83,11 +102,12 @@ class TestSyncInstances:
             "vastly.instance.fetch_instances", lambda: [make_instance()]
         )
         result = sync_instances(make_config())
-        assert len(result) == 1
-        assert result[0]["name"] == "1xRTX4090-US"
-        assert result[0]["cached"] is False
+        running = [i for i in result if i.status == "running"]
+        assert len(running) == 1
+        assert running[0].name == "1xRTX4090-US"
+        assert running[0].cached is False
 
-    def test_filters_non_running_instances(
+    def test_returns_all_instances_including_non_running(
         self, monkeypatch, make_instance, make_config
     ):
         monkeypatch.setattr(
@@ -98,9 +118,11 @@ class TestSyncInstances:
             ],
         )
         result = sync_instances(make_config())
-        assert len(result) == 1
+        assert len(result) == 2
+        running = [i for i in result if i.status == "running"]
+        assert len(running) == 1
 
-    def test_skips_instance_without_port_22(
+    def test_skips_running_instance_without_port_22(
         self, monkeypatch, make_instance, make_config
     ):
         monkeypatch.setattr(
@@ -108,9 +130,10 @@ class TestSyncInstances:
             lambda: [make_instance(ports={})],
         )
         result = sync_instances(make_config())
+        # Running instance without port 22 is skipped entirely
         assert result == []
 
-    def test_skips_instance_with_malformed_ports(
+    def test_skips_running_instance_with_malformed_ports(
         self, monkeypatch, make_instance, make_config
     ):
         monkeypatch.setattr(
@@ -123,22 +146,29 @@ class TestSyncInstances:
     def test_falls_back_to_cache_when_api_fails(
         self, monkeypatch, make_config, ssh_config_dir
     ):
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: None)
+        def raise_api_error():
+            raise APIError("timeout")
+
+        monkeypatch.setattr("vastly.instance.fetch_instances", raise_api_error)
         monkeypatch.setattr(
             "vastly.instance.cached_config_names",
             lambda: ["1xRTX4090-US"],
         )
         result = sync_instances(make_config())
         assert len(result) == 1
-        assert result[0]["cached"] is True
-        assert result[0]["name"] == "1xRTX4090-US"
+        assert result[0].cached is True
+        assert result[0].name == "1xRTX4090-US"
 
-    def test_returns_none_when_api_fails_and_no_cache(self, monkeypatch, make_config):
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: None)
+    def test_raises_when_api_fails_and_no_cache(self, monkeypatch, make_config):
+        def raise_api_error():
+            raise APIError("timeout")
+
+        monkeypatch.setattr("vastly.instance.fetch_instances", raise_api_error)
         monkeypatch.setattr("vastly.instance.cached_config_names", lambda: [])
-        assert sync_instances(make_config()) is None
+        with pytest.raises(APIError):
+            sync_instances(make_config())
 
-    def test_returns_empty_list_when_none_running(
+    def test_non_running_instances_included_in_results(
         self, monkeypatch, make_instance, make_config
     ):
         monkeypatch.setattr(
@@ -146,7 +176,8 @@ class TestSyncInstances:
             lambda: [make_instance(cur_state="exited")],
         )
         result = sync_instances(make_config())
-        assert result == []
+        assert len(result) == 1
+        assert result[0].status == "exited"
 
     def test_port_forwards_avoid_collisions(
         self, monkeypatch, make_instance, make_config
@@ -187,46 +218,35 @@ class TestSyncInstances:
 
 
 class TestGetSyncedInstances:
-    def test_prints_error_when_api_unreachable(self, monkeypatch, make_config, capsys):
-        monkeypatch.setattr("vastly.instance.sync_instances", lambda cfg: None)
-        assert get_synced_instances(make_config()) is None
-        assert "unreachable" in capsys.readouterr().out.lower()
+    def test_raises_when_api_unreachable_and_no_cache(self, monkeypatch, make_config):
+        def raise_api(cfg):
+            raise APIError("timeout")
 
-    def test_prints_message_when_no_running(self, monkeypatch, make_config, capsys):
+        monkeypatch.setattr("vastly.instance.sync_instances", raise_api)
+        with pytest.raises(APIError):
+            get_synced_instances(make_config())
+
+    def test_raises_when_no_instances(self, monkeypatch, make_config):
         monkeypatch.setattr("vastly.instance.sync_instances", lambda cfg: [])
-        assert get_synced_instances(make_config()) is None
-        assert "No running" in capsys.readouterr().out
+        with pytest.raises(VastlyError, match="No Vast instances"):
+            get_synced_instances(make_config())
 
     def test_returns_instances_when_found(self, monkeypatch, make_config):
-        instances = [{"name": "test", "cached": False}]
+        instances = [_inst()]
         monkeypatch.setattr("vastly.instance.sync_instances", lambda cfg: instances)
         assert get_synced_instances(make_config()) == instances
 
 
 class TestShowTable:
     def test_live_instance_format(self, capsys):
-        instances = [
-            {
-                "name": "1xRTX4090-US",
-                "cached": False,
-                "dph_total": 0.55,
-                "start_date": None,
-            },
-        ]
+        instances = [_inst(name="1xRTX4090-US", dph_total=0.55)]
         show_table(instances)
         out = capsys.readouterr().out
         assert "1xRTX4090-US" in out
         assert "$0.55/hr" in out
 
     def test_cached_instance_format(self, capsys):
-        instances = [
-            {
-                "name": "1xRTX4090-US",
-                "cached": True,
-                "dph_total": 0,
-                "start_date": None,
-            },
-        ]
+        instances = [_inst(name="1xRTX4090-US", cached=True, dph_total=0)]
         show_table(instances)
         out = capsys.readouterr().out
         assert "1xRTX4090-US" in out
@@ -234,8 +254,8 @@ class TestShowTable:
 
     def test_multiple_instances(self, capsys):
         instances = [
-            {"name": "gpu-1", "cached": False, "dph_total": 0.50, "start_date": None},
-            {"name": "gpu-2", "cached": True, "dph_total": 0, "start_date": None},
+            _inst(name="gpu-1", dph_total=0.50),
+            _inst(name="gpu-2", id=2, cached=True, dph_total=0),
         ]
         show_table(instances)
         out = capsys.readouterr().out
