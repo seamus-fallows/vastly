@@ -99,7 +99,7 @@ def build_instance_name(inst: dict[str, Any], seen: set[str]) -> str:
 
     Appends the instance ID on collision.
     """
-    gpu_name = re.sub(r"\s+", "", inst.get("gpu_name", ""))
+    gpu_name = re.sub(r"\s+", "", inst.get("gpu_name", "")) or "unknown"
     num_gpus = inst.get("num_gpus", 1)
     geo = inst.get("geolocation", "")
 

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import make_test_instance as _inst
 from vastly import __version__, cyan, dim, green, red, yellow
 from vastly.config import DEFAULTS, _detect_ide, _ide_from_env, _validate_config, load_config
 from vastly.errors import ConfigError, VastlyError
@@ -50,15 +51,6 @@ def _config(**kwargs) -> dict:
     base.update(kwargs)
     return base
 
-
-def _inst(name: str = "test", id: int = 1, **kwargs) -> Instance:
-    """Create an Instance with sensible defaults for testing."""
-    defaults = dict(
-        name=name, id=id, dph_total=0.0, gpu_name="", num_gpus=1,
-        start_date=None, cached=False, status="running", alias=None,
-    )
-    defaults.update(kwargs)
-    return Instance(**defaults)
 
 
 class TestFormatUptime:
@@ -638,7 +630,13 @@ class TestInstanceNaming:
         inst = {"num_gpus": 1, "geolocation": "", "id": 111}
         seen = set()
         name = build_instance_name(inst, seen)
-        assert name == "1x"
+        assert name == "1xunknown"
+
+    def test_handles_empty_gpu_name(self):
+        inst = {"gpu_name": "", "num_gpus": 1, "geolocation": "", "id": 111}
+        seen = set()
+        name = build_instance_name(inst, seen)
+        assert name == "1xunknown"
 
 
 class TestLocalRepoInfo:
@@ -1438,17 +1436,9 @@ class TestCp:
         from vastly.commands import cmd_cp
 
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
-        args = type(
-            "Args",
-            (),
-            {
-                "direction": "down",
-                "paths": ["file.txt"],
-                "config": False,
-                "instance": None,
-                "verbose": False,
-            },
-        )()
+        args = argparse.Namespace(
+            direction="down", paths=["file.txt"], config=False, instance=None, verbose=False,
+        )
         with pytest.raises(VastlyError, match="Not in a git repo"):
             cmd_cp(args)
 
@@ -1463,17 +1453,9 @@ class TestCp:
         monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr("vastly.commands._local_repo_info", lambda _: None)
 
-        args = type(
-            "Args",
-            (),
-            {
-                "direction": "down",
-                "paths": ["file.txt"],
-                "config": False,
-                "instance": None,
-                "verbose": False,
-            },
-        )()
+        args = argparse.Namespace(
+            direction="down", paths=["file.txt"], config=False, instance=None, verbose=False,
+        )
         with pytest.raises(VastlyError, match="Could not determine repo name"):
             cmd_cp(args)
 
@@ -1494,17 +1476,9 @@ class TestCp:
             ],
         )
 
-        args = type(
-            "Args",
-            (),
-            {
-                "direction": "up",
-                "paths": ["nonexistent.txt"],
-                "config": False,
-                "instance": None,
-                "verbose": False,
-            },
-        )()
+        args = argparse.Namespace(
+            direction="up", paths=["nonexistent.txt"], config=False, instance=None, verbose=False,
+        )
         with pytest.raises(VastlyError, match="All copies failed"):
             cmd_cp(args)
 
@@ -1792,7 +1766,7 @@ class TestShowTableMixedStates:
         ]
         show_table(instances)
         output = capsys.readouterr().out
-        lines = [l for l in output.split("\n") if "$" in l]
+        lines = [line for line in output.split("\n") if "$" in line]
         # Both "$" signs should be at the same column position
         positions = [line.index("$") for line in lines]
         assert len(set(positions)) == 1, (
@@ -1818,7 +1792,7 @@ class TestShowTableMixedStates:
         ]
         show_table(instances)
         output = capsys.readouterr().out
-        lines = [l for l in output.split("\n") if "$" in l]
+        lines = [line for line in output.split("\n") if "$" in line]
         positions = [line.index("$") for line in lines]
         assert len(set(positions)) == 1, (
             f"Cost column misaligned: positions {positions}"
@@ -1841,7 +1815,7 @@ class TestCmdStart:
             ],
         )
 
-        args = type("Args", (), {"name": None, "no_connect": False, "verbose": False})()
+        args = argparse.Namespace(name=None, no_connect=False, verbose=False)
         with pytest.raises(VastlyError, match="already running"):
             cmd_start(args)
 
@@ -1859,7 +1833,7 @@ class TestCmdStart:
             ],
         )
 
-        args = type("Args", (), {"name": "b", "no_connect": False, "verbose": False})()
+        args = argparse.Namespace(name="b", no_connect=False, verbose=False)
         with pytest.raises(VastlyError, match="Cannot start.*offline"):
             cmd_start(args)
 
@@ -1883,7 +1857,7 @@ class TestCmdStart:
             lambda action, inst: actions.append((action, inst.id)),
         )
 
-        args = type("Args", (), {"name": "b", "no_connect": True, "verbose": False})()
+        args = argparse.Namespace(name="b", no_connect=True, verbose=False)
         cmd_start(args)
 
         assert actions == [("start", 2)]
@@ -1907,7 +1881,7 @@ class TestCmdStart:
             "vastly.commands.cmd_connect", lambda a: connect_called.append(True)
         )
 
-        args = type("Args", (), {"name": None, "no_connect": True, "verbose": False})()
+        args = argparse.Namespace(name=None, no_connect=True, verbose=False)
         cmd_start(args)
 
         assert connect_called == []
@@ -1930,7 +1904,7 @@ class TestCmdStart:
             "vastly.commands._vastai_action", lambda action, inst: actions.append(action)
         )
 
-        args = type("Args", (), {"name": None, "no_connect": True, "verbose": False})()
+        args = argparse.Namespace(name=None, no_connect=True, verbose=False)
         cmd_start(args)
 
         assert actions == []  # Should not call vastai start for loading state
@@ -1959,7 +1933,7 @@ class TestCmdStart:
             lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout='{"cur_state": "stopped"}', stderr=""),
         )
 
-        args = type("Args", (), {"name": None, "no_connect": False, "verbose": False})()
+        args = argparse.Namespace(name=None, no_connect=False, verbose=False)
         with pytest.raises(VastlyError, match="Timed out"):
             cmd_start(args)
 
@@ -1993,7 +1967,7 @@ class TestCmdStart:
         monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
         monkeypatch.setattr("vastly.commands.cmd_connect", lambda a: None)
 
-        args = type("Args", (), {"name": None, "no_connect": False, "verbose": False})()
+        args = argparse.Namespace(name=None, no_connect=False, verbose=False)
         cmd_start(args)
 
         output = capsys.readouterr().out
@@ -2017,7 +1991,7 @@ class TestCmdStopLifecycle:
             ],
         )
 
-        args = type("Args", (), {"name": "a", "all": False, "verbose": False})()
+        args = argparse.Namespace(name="a", all=False, yes=False, verbose=False)
         with pytest.raises(VastlyError, match="Already stopped"):
             cmd_stop(args)
 
@@ -2037,7 +2011,7 @@ class TestCmdStopLifecycle:
         actions = []
         monkeypatch.setattr("vastly.commands._vastai_action", lambda a, i: actions.append(a))
 
-        args = type("Args", (), {"name": "a", "all": False, "verbose": False})()
+        args = argparse.Namespace(name="a", all=False, yes=False, verbose=False)
         cmd_stop(args)
 
         assert actions == ["stop"]
@@ -2063,7 +2037,7 @@ class TestCmdStopLifecycle:
             "vastly.commands._vastai_action", lambda a, i: stopped_ids.append(i.id)
         )
 
-        args = type("Args", (), {"name": None, "all": True, "verbose": False})()
+        args = argparse.Namespace(name=None, all=True, yes=False, verbose=False)
         cmd_stop(args)
 
         # Should stop running + scheduling, skip stopped
@@ -2084,7 +2058,7 @@ class TestCmdStopLifecycle:
             ],
         )
 
-        args = type("Args", (), {"name": "a", "all": False, "verbose": False})()
+        args = argparse.Namespace(name="a", all=False, yes=False, verbose=False)
         with pytest.raises(VastlyError, match="No running instances to stop"):
             cmd_stop(args)
 
@@ -2126,7 +2100,7 @@ class TestCmdConfig:
         )
         monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
 
-        args = type("Args", (), {"verbose": False})()
+        args = argparse.Namespace(verbose=False)
         cmd_config(args)
 
         output = capsys.readouterr().out
@@ -2143,7 +2117,7 @@ class TestCmdConfig:
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
 
-        args = type("Args", (), {"verbose": False})()
+        args = argparse.Namespace(verbose=False)
         cmd_config(args)
 
         output = capsys.readouterr().out
@@ -2169,7 +2143,7 @@ class TestCmdConfig:
         )
         monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
 
-        args = type("Args", (), {"verbose": False})()
+        args = argparse.Namespace(verbose=False)
         cmd_config(args)
 
         output = capsys.readouterr().out
@@ -2207,16 +2181,9 @@ class TestHttpsRemoteWarning:
         monkeypatch.setattr("vastly.commands.open_ide", lambda *a: None)
         monkeypatch.setattr("vastly.update.check_for_update", lambda: None)
 
-        args = type(
-            "Args",
-            (),
-            {
-                "name": None,
-                "no_setup": False,
-                "force_setup": False,
-                "verbose": False,
-            },
-        )()
+        args = argparse.Namespace(
+            name=None, no_setup=False, force_setup=False, all=False, verbose=False,
+        )
         cmd_connect(args)
 
         output = capsys.readouterr().out
@@ -2288,11 +2255,9 @@ class TestCmdNameClear:
 
         from vastly.commands import cmd_name
 
-        args = type(
-            "Args",
-            (),
-            {"alias": "train", "clear": True, "instance": None, "verbose": False},
-        )()
+        args = argparse.Namespace(
+            alias="train", clear=True, instance=None, verbose=False,
+        )
         cmd_name(args)
 
         saved = json.loads(aliases_file.read_text(encoding="utf-8"))
@@ -2305,11 +2270,9 @@ class TestCmdNameClear:
 
         from vastly.commands import cmd_name
 
-        args = type(
-            "Args",
-            (),
-            {"alias": "nope", "clear": True, "instance": None, "verbose": False},
-        )()
+        args = argparse.Namespace(
+            alias="nope", clear=True, instance=None, verbose=False,
+        )
         with pytest.raises(VastlyError, match="No alias 'nope' found"):
             cmd_name(args)
 
@@ -2352,16 +2315,9 @@ class TestCmdNameSshCleanup:
             "vastly.commands.select_instance", lambda insts, name, **kw: insts[:1]
         )
 
-        args = type(
-            "Args",
-            (),
-            {
-                "alias": "new-alias",
-                "clear": False,
-                "instance": None,
-                "verbose": False,
-            },
-        )()
+        args = argparse.Namespace(
+            alias="new-alias", clear=False, instance=None, verbose=False,
+        )
         cmd_name(args)
 
         assert not old_config.exists(), "Old alias SSH config should be removed"
@@ -2456,16 +2412,9 @@ class TestConnectStoppedInstance:
             ],
         )
 
-        args = type(
-            "Args",
-            (),
-            {
-                "name": "2xA100-US",
-                "no_setup": False,
-                "force_setup": False,
-                "verbose": False,
-            },
-        )()
+        args = argparse.Namespace(
+            name="2xA100-US", no_setup=False, force_setup=False, all=False, verbose=False,
+        )
         with pytest.raises(VastlyError, match="stopped.*vst start"):
             cmd_connect(args)
 
@@ -2495,16 +2444,9 @@ class TestConnectStoppedInstance:
         )
         monkeypatch.setattr("vastly.commands._poll_for_running", lambda inst_id: None)
 
-        args = type(
-            "Args",
-            (),
-            {
-                "name": None,
-                "no_setup": True,
-                "force_setup": False,
-                "verbose": False,
-            },
-        )()
+        args = argparse.Namespace(
+            name=None, no_setup=True, force_setup=False, all=False, verbose=False,
+        )
 
         # After auto-start, sync returns running instance
         call_count = [0]
@@ -2926,6 +2868,7 @@ class TestCmdConnectIntegration:
             name=None,
             no_setup=False,
             force_setup=False,
+            all=False,
             verbose=False,
         )
         cmd_connect(args)
@@ -3199,3 +3142,122 @@ class TestCmdSsh:
         instances = [_inst(name="1xRTX4090-TW", id=100)]
         with pytest.raises(VastlyError, match="reserved"):
             validate_alias("ssh", instances, {})
+
+
+class TestStartAndResync:
+    """Tests for the _start_and_resync helper."""
+
+    def test_starts_polls_and_resyncs(self, monkeypatch):
+        from vastly.commands import _start_and_resync
+
+        started = []
+        polled = []
+
+        def fake_action(action, inst):
+            started.append((action, inst.id))
+
+        def fake_poll(inst_id):
+            polled.append(inst_id)
+
+        running_inst = _inst(name="1xA100-US", id=100, status="running")
+
+        def fake_sync(config):
+            return [running_inst]
+
+        monkeypatch.setattr("vastly.commands._vastai_action", fake_action)
+        monkeypatch.setattr("vastly.commands._poll_for_running", fake_poll)
+        monkeypatch.setattr("vastly.commands.sync_instances", fake_sync)
+
+        to_start = [_inst(name="1xA100-US", id=100, status="stopped")]
+        all_inst, running = _start_and_resync(to_start, {})
+
+        assert started == [("start", 100)]
+        assert polled == ["100"]
+        assert len(running) == 1
+        assert running[0].name == "1xA100-US"
+
+    def test_raises_when_no_running_after_resync(self, monkeypatch):
+        from vastly.commands import _start_and_resync
+
+        monkeypatch.setattr("vastly.commands._vastai_action", lambda *a: None)
+        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *a: None)
+        monkeypatch.setattr(
+            "vastly.commands.sync_instances",
+            lambda config: [_inst(name="gpu", id=1, status="stopped")],
+        )
+
+        with pytest.raises(VastlyError, match="not reachable"):
+            _start_and_resync([_inst(status="stopped")], {})
+
+
+class TestYesFlag:
+    """Tests for --yes / -y flag on stop and destroy."""
+
+    def test_destroy_yes_skips_confirmation(self, monkeypatch):
+        from vastly.commands import cmd_destroy
+
+        destroyed = []
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr(
+            "vastly.commands.load_config", lambda **kw: _config()
+        )
+        monkeypatch.setattr(
+            "vastly.commands._check_prerequisites", lambda **kw: None
+        )
+        monkeypatch.setattr(
+            "vastly.commands.get_synced_instances",
+            lambda config: [_inst(name="gpu", id=1)],
+        )
+        monkeypatch.setattr(
+            "vastly.commands._vastai_destroy",
+            lambda inst: destroyed.append(inst.name),
+        )
+        # _confirm should NOT be called when yes=True
+        monkeypatch.setattr(
+            "vastly.commands._confirm",
+            lambda prompt: (_ for _ in ()).throw(AssertionError("confirm was called")),
+        )
+
+        args = argparse.Namespace(
+            command="destroy", name=None, all=False, yes=True, verbose=False,
+        )
+        cmd_destroy(args)
+
+        assert destroyed == ["gpu"]
+
+    def test_stop_yes_skips_confirmation(self, monkeypatch):
+        from vastly.commands import cmd_stop
+
+        stopped = []
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr(
+            "vastly.commands.load_config", lambda **kw: _config()
+        )
+        monkeypatch.setattr(
+            "vastly.commands._check_prerequisites", lambda **kw: None
+        )
+        monkeypatch.setattr(
+            "vastly.commands.get_synced_instances",
+            lambda config: [
+                _inst(name="gpu-a", id=1),
+                _inst(name="gpu-b", id=2),
+            ],
+        )
+        monkeypatch.setattr(
+            "vastly.commands._vastai_action",
+            lambda action, inst: stopped.append(inst.name),
+        )
+        # _confirm should NOT be called when yes=True
+        monkeypatch.setattr(
+            "vastly.commands._confirm",
+            lambda prompt: (_ for _ in ()).throw(AssertionError("confirm was called")),
+        )
+
+        args = argparse.Namespace(
+            command="stop", name=None, all=True, yes=True, verbose=False,
+        )
+        cmd_stop(args)
+
+        assert sorted(stopped) == ["gpu-a", "gpu-b"]

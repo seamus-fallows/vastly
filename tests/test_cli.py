@@ -31,9 +31,8 @@ class TestCheckPrerequisites:
             "shutil.which", lambda x: None if x == "git" else f"/usr/bin/{x}"
         )
         monkeypatch.setattr("vastly.commands.check_ide", lambda x: True)
-        with pytest.raises(VastlyError, match="git") as exc_info:
+        with pytest.raises(VastlyError, match="git"):
             _check_prerequisites(need_ide=True, ide="code")
-        assert "git-scm.com" in str(exc_info.value)
 
     def test_missing_ssh(self, monkeypatch):
         monkeypatch.setattr(
@@ -67,20 +66,27 @@ class TestCheckPrerequisites:
         assert "ssh" in msg.lower()
         assert "code" in msg
 
-    def test_known_ide_includes_download_url(self, monkeypatch):
+    def test_falls_back_to_other_ide(self, monkeypatch):
+        """If configured IDE is missing but the other is installed, fall back."""
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-        monkeypatch.setattr("vastly.commands.check_ide", lambda x: False)
-        with pytest.raises(VastlyError, match="cursor.com"):
-            _check_prerequisites(need_ide=True, ide="cursor")
+        monkeypatch.setattr(
+            "vastly.commands.check_ide", lambda x: x == "cursor"
+        )
+        result = _check_prerequisites(need_ide=True, ide="code")
+        assert result == "cursor"
 
-    def test_unknown_ide_omits_url(self, monkeypatch):
+    def test_falls_back_preserves_configured_when_found(self, monkeypatch):
+        """If configured IDE is installed, return it unchanged."""
+        monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: True)
+        result = _check_prerequisites(need_ide=True, ide="code")
+        assert result == "code"
+
+    def test_unknown_ide_missing_raises(self, monkeypatch):
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
         monkeypatch.setattr("vastly.commands.check_ide", lambda x: False)
-        with pytest.raises(VastlyError) as exc_info:
+        with pytest.raises(VastlyError, match="zed"):
             _check_prerequisites(need_ide=True, ide="zed")
-        msg = str(exc_info.value)
-        assert "zed" in msg
-        assert "Download from" not in msg
 
 
 class TestLocalRepoInfo:

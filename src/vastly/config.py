@@ -125,37 +125,37 @@ def _validate_config(config: Config) -> None:
         )
 
     # sshKeyPath: None or non-empty string
-    skp = config.get("sshKeyPath")
-    if skp is not None and (not isinstance(skp, str) or not skp):
+    ssh_key_path = config.get("sshKeyPath")
+    if ssh_key_path is not None and (not isinstance(ssh_key_path, str) or not ssh_key_path):
         raise ConfigError(
             f"Invalid config: 'sshKeyPath' must be None or a non-empty string, "
-            f"got {type(skp).__name__}"
+            f"got {type(ssh_key_path).__name__}"
         )
 
     # disableAutoTmux: bool
-    dat = config.get("disableAutoTmux")
-    if not isinstance(dat, bool):
+    disable_tmux = config.get("disableAutoTmux")
+    if not isinstance(disable_tmux, bool):
         raise ConfigError(
             f"Invalid config: 'disableAutoTmux' must be a bool, "
-            f"got {type(dat).__name__}"
+            f"got {type(disable_tmux).__name__}"
         )
 
     # installCommand: None or non-empty string
-    ic = config.get("installCommand")
-    if ic is not None and (not isinstance(ic, str) or not ic):
+    install_cmd = config.get("installCommand")
+    if install_cmd is not None and (not isinstance(install_cmd, str) or not install_cmd):
         raise ConfigError(
             f"Invalid config: 'installCommand' must be None or a non-empty string, "
-            f"got {type(ic).__name__}"
+            f"got {type(install_cmd).__name__}"
         )
 
     # portForwards: list of dicts with int local and int remote
-    pf = config.get("portForwards")
-    if not isinstance(pf, list):
+    port_forwards = config.get("portForwards")
+    if not isinstance(port_forwards, list):
         raise ConfigError(
             f"Invalid config: 'portForwards' must be a list of {{local, remote}} objects, "
-            f"got {type(pf).__name__}"
+            f"got {type(port_forwards).__name__}"
         )
-    for i, entry in enumerate(pf):
+    for i, entry in enumerate(port_forwards):
         if not isinstance(entry, dict):
             raise ConfigError(
                 f"Invalid config: 'portForwards[{i}]' must be a {{local, remote}} object, "

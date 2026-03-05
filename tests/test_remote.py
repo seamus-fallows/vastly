@@ -6,18 +6,8 @@ import subprocess
 
 import pytest
 
-from vastly.instance import Instance
-from vastly.remote import setup_instances
-
-_SEP = "__VASTLY_SEP__"
-
-
-def _inst(name="gpu-1"):
-    """Create a minimal Instance for testing."""
-    return Instance(
-        name=name, id=1, dph_total=0.50, gpu_name="RTX 4090",
-        num_gpus=1, start_date=None, cached=False, status="running", alias=None,
-    )
+from conftest import make_test_instance as _inst
+from vastly.remote import _PROBE_SEP, setup_instances
 
 
 class TestSetupInstances:
@@ -52,18 +42,18 @@ class TestSetupInstances:
 
         def mock(host, command, **kwargs):
             # Combined probe: cat marker + separator + ls setup dir
-            if _SEP in command:
+            if _PROBE_SEP in command:
                 if not reachable:
                     return subprocess.CompletedProcess([], 255, stdout="", stderr="")
                 if already_setup:
                     marker = '{"timestamp": "2024-01-01"}'
                     return subprocess.CompletedProcess(
                         [], 0,
-                        stdout=f"{marker}\n{_SEP}\nr.json\n",
+                        stdout=f"{marker}\n{_PROBE_SEP}\nr.json\n",
                         stderr="",
                     )
                 return subprocess.CompletedProcess(
-                    [], 0, stdout=f"\n{_SEP}\n\n", stderr=""
+                    [], 0, stdout=f"\n{_PROBE_SEP}\n\n", stderr=""
                 )
             # Force-setup rm command
             if command.startswith("rm -f"):
@@ -163,11 +153,11 @@ class TestSetupInstances:
 
     def test_multiple_instances_mixed_results(self, monkeypatch):
         def mixed_ssh(host, command, **kwargs):
-            if _SEP in command:
+            if _PROBE_SEP in command:
                 if host == "fail-gpu":
                     return subprocess.CompletedProcess([], 255, stdout="", stderr="")
                 return subprocess.CompletedProcess(
-                    [], 0, stdout=f"\n{_SEP}\n\n", stderr=""
+                    [], 0, stdout=f"\n{_PROBE_SEP}\n\n", stderr=""
                 )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 

@@ -17,6 +17,10 @@ from vastly.ssh import run_scp, run_ssh
 REMOTE_MARKER_DIR = "~/.vastly/setup"
 REMOTE_MARKER_PATTERN = "~/.vastly/setup/{repo_name}.json"
 
+# Separator used in combined SSH probe commands (read marker + list markers).
+# Also referenced in tests -- import from here to avoid duplication.
+_PROBE_SEP = "__VASTLY_SEP__"
+
 
 def _check_repo_mismatch(repo_name: str, setup_files: list[str]) -> list[str]:
     """Return names of other repos set up on the instance.
@@ -61,8 +65,7 @@ def setup_instances(
     disable_tmux = "true" if config["disableAutoTmux"] else "false"
     success_names = []
 
-    q_repo = shlex.quote(repo_name)
-    sep = "__VASTLY_SEP__"
+    quoted_name = shlex.quote(repo_name)
     https_warned = False
 
     for inst in instances:
@@ -74,14 +77,14 @@ def setup_instances(
         # "|| true" ensures exit 0 whenever SSH connects (even if file/dir is missing).
         if force_setup:
             marker_cmd = (
-                f"rm -f {REMOTE_MARKER_DIR}/{q_repo}.json; "
-                f"printf '\\n{sep}\\n'; "
+                f"rm -f {REMOTE_MARKER_DIR}/{quoted_name}.json; "
+                f"printf '\\n{_PROBE_SEP}\\n'; "
                 f"ls {REMOTE_MARKER_DIR}/ 2>/dev/null || true"
             )
         else:
             marker_cmd = (
-                f"cat {REMOTE_MARKER_DIR}/{q_repo}.json 2>/dev/null || true; "
-                f"printf '\\n{sep}\\n'; "
+                f"cat {REMOTE_MARKER_DIR}/{quoted_name}.json 2>/dev/null || true; "
+                f"printf '\\n{_PROBE_SEP}\\n'; "
                 f"ls {REMOTE_MARKER_DIR}/ 2>/dev/null || true"
             )
 
@@ -100,7 +103,7 @@ def setup_instances(
             continue
 
         # Parse probe output: marker JSON (before separator) and setup listing (after)
-        parts = marker.stdout.split(sep)
+        parts = marker.stdout.split(_PROBE_SEP)
         marker_json = parts[0].strip()
         listing_str = parts[1].strip() if len(parts) > 1 else ""
         setup_files = listing_str.split("\n") if listing_str else []

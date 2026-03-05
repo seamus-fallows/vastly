@@ -81,20 +81,10 @@ log "Verifying access to ${REPO_URL}..."
 if ! git ls-remote "$REPO_URL" HEAD &>/dev/null; then
     if [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
         die "Cannot access repo via SSH. Agent forwarding may not be working.
-  Check that:
-    1. You have an SSH key added to ${REPO_HOST}
-    2. Your SSH agent is running locally (test: ssh-add -l)
-    3. Your key is loaded in the agent (load it: ssh-add)
-  Docs: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
+  Check that your SSH agent is running (ssh-add -l) and your key is loaded (ssh-add)."
     else
-        die "Cannot access repo via HTTPS. If this is a private repo,
-  HTTPS credentials cannot be securely forwarded to remote instances.
-  To fix this, set up SSH key authentication:
-    1. Generate a key: ssh-keygen -t ed25519
-    2. Add it to ${REPO_HOST}: https://${REPO_HOST}/settings/ssh/new
-    3. Load it into your agent: ssh-add
-    4. Switch your remote: git remote set-url origin git@${REPO_HOST}:<user>/<repo>.git
-  Docs: https://docs.github.com/en/authentication/connecting-to-github-with-ssh"
+        die "Cannot access repo via HTTPS (credentials can't be forwarded).
+  Switch to SSH: git remote set-url origin git@${REPO_HOST}:<user>/<repo>.git"
     fi
 fi
 

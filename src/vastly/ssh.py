@@ -101,6 +101,8 @@ def write_ssh_config(
 
     lines = [
         _GENERATED_HEADER,
+        "# Vast.ai instances are ephemeral with recycled IPs, so host key",
+        "# verification is disabled. Agent forwarding enables git clone via SSH.",
         f"Host {name}",
         f"    HostName {host}",
         f"    Port {port}",

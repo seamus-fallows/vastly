@@ -52,7 +52,7 @@ _CMD_HELP = {
         ],
     },
     "stop": {
-        "usage": "vst stop [name] [--all]",
+        "usage": "vst stop [name] [--all] [-y]",
         "desc": "Stop a running instance.",
         "examples": [
             ("vst stop", "stop your instance"),
@@ -60,12 +60,13 @@ _CMD_HELP = {
         ],
     },
     "destroy": {
-        "usage": "vst destroy [name] [--all]",
+        "usage": "vst destroy [name] [--all] [-y]",
         "desc": "Destroy an instance (irreversible).",
         "detail": "Also removes its SSH config and any alias.",
         "examples": [
             ("vst destroy", "destroy your instance"),
             ("vst destroy --all", "destroy everything"),
+            ("vst destroy --all -y", "destroy all without confirmation"),
         ],
     },
     "cp": {
@@ -97,12 +98,15 @@ _CMD_HELP = {
     "ssh": {
         "usage": "vst ssh [name] [command...]",
         "desc": "Open an SSH session to an instance.",
-        "detail": "Without a command, opens an interactive shell. With a command, runs it and exits.",
+        "detail": "Without a command, opens an interactive shell. With a command, runs it and exits.\n"
+        "If the first argument matches an instance name, it connects there.\n"
+        "Otherwise it's treated as a command. Use -- to force command interpretation.",
         "examples": [
             ("vst ssh", "interactive shell"),
             ("vst ssh train", "SSH by alias"),
             ("vst ssh nvidia-smi", "run a command"),
             ("vst ssh train nvidia-smi", "run a command on a named instance"),
+            ("vst ssh -- -v", "pass flags as a remote command"),
         ],
     },
 }
@@ -205,7 +209,6 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
     p = subparsers.add_parser("connect", help="connect to an instance and open IDE")
     p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
     p.add_argument("--all", action="store_true", help="connect to all instances")
-    p.add_argument("-v", "--verbose", action="store_true")
     g = p.add_mutually_exclusive_group()
     g.add_argument(
         "-n",
@@ -223,21 +226,20 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
 
     # List
     p = subparsers.add_parser("list", help="list running instances")
-    p.add_argument("-v", "--verbose", action="store_true")
     parsers["list"] = p
 
     # Stop
     p = subparsers.add_parser("stop", help="stop a running instance")
     p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
     p.add_argument("--all", action="store_true", help="stop all running instances")
-    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
     parsers["stop"] = p
 
     # Destroy
     p = subparsers.add_parser("destroy", help="destroy an instance (irreversible)")
     p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
     p.add_argument("--all", action="store_true", help="destroy all instances")
-    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
     parsers["destroy"] = p
 
     # Cp
@@ -248,7 +250,6 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
         "-c", "--config", action="store_true", help="copy all copyFiles entries"
     )
     p.add_argument("-i", "--instance", help=f"target instance ({hint})")
-    p.add_argument("-v", "--verbose", action="store_true")
     parsers["cp"] = p
 
     # Start
@@ -257,7 +258,6 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
     p.add_argument(
         "-n", "--no-connect", action="store_true", help="start without connecting"
     )
-    p.add_argument("-v", "--verbose", action="store_true")
     parsers["start"] = p
 
     # Name
@@ -265,12 +265,10 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
     p.add_argument("alias", help="name to assign")
     p.add_argument("-i", "--instance", help=f"instance to name ({hint})")
     p.add_argument("--clear", action="store_true", help="remove the alias")
-    p.add_argument("-v", "--verbose", action="store_true")
     parsers["name"] = p
 
     # Config
     p = subparsers.add_parser("config", help="show current configuration")
-    p.add_argument("-v", "--verbose", action="store_true")
     parsers["config"] = p
 
     # SSH
@@ -280,7 +278,6 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
         "remote_cmd", nargs=argparse.REMAINDER, help="command to run (optional)",
         metavar="command",
     )
-    p.add_argument("-v", "--verbose", action="store_true")
     parsers["ssh"] = p
 
     return parser, parsers
@@ -319,9 +316,10 @@ def main(argv: list[str] | None = None) -> None:
         args.command = "connect"
         args.name = None
 
-    # Subparser defaults can override the main parser's flags, so check argv directly
-    if "-v" in raw or "--verbose" in raw:
-        args.verbose = True
+    # Argparse subparser defaults override top-level flags when both define
+    # the same attribute. These flags are on both the top-level parser (for
+    # bare `vst -f`) and the connect subparser, so we scan raw argv to
+    # ensure the top-level value isn't lost.
     if "-f" in raw or "--force-setup" in raw:
         args.force_setup = True
     if "-n" in raw or "--no-setup" in raw:

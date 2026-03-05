@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from conftest import make_test_instance as _inst
 from vastly.errors import APIError, VastlyError
 from vastly.instance import (
     Instance,
@@ -14,21 +15,6 @@ from vastly.instance import (
     show_table,
     sync_instances,
 )
-
-
-def _inst(name="test", id=1, **kwargs):
-    """Helper to create Instance objects with sensible defaults."""
-    return Instance(
-        name=kwargs.pop("name", name),
-        id=kwargs.pop("id", id),
-        dph_total=kwargs.pop("dph_total", 0.50),
-        gpu_name=kwargs.pop("gpu_name", "RTX 4090"),
-        num_gpus=kwargs.pop("num_gpus", 1),
-        start_date=kwargs.pop("start_date", None),
-        cached=kwargs.pop("cached", False),
-        status=kwargs.pop("status", "running"),
-        alias=kwargs.pop("alias", None),
-    )
 
 
 class TestFetchInstances:
