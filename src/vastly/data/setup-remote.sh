@@ -60,7 +60,7 @@ git config --global user.email "$GIT_EMAIL"
 # ── Step 3: Git host known keys ───────────────────────────────────────
 
 if [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
-    REPO_HOST=$(echo "$REPO_URL" | sed -n 's/.*@\([^:]*\).*/\1/p')
+    REPO_HOST=$(echo "$REPO_URL" | sed -n 's/.*@\([^:/]*\).*/\1/p')
     if [[ -n "$REPO_HOST" ]] && ! grep -q "^${REPO_HOST} " ~/.ssh/known_hosts 2>/dev/null; then
         log "Adding ${REPO_HOST} to known_hosts"
         mkdir -p ~/.ssh

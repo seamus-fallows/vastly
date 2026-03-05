@@ -7,6 +7,7 @@ import sys
 
 import vastly
 from vastly import __version__, cyan, dim, green, red
+from vastly.config import CONFIG_PATH, ensure_config
 from vastly.commands import (
     cmd_config,
     cmd_connect,
@@ -289,6 +290,13 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
 def main(argv: list[str] | None = None) -> None:
     """Parse arguments and dispatch to the appropriate subcommand."""
     raw = list(argv if argv is not None else sys.argv[1:])
+
+    if ensure_config():
+        print(dim("  \u250c Created ") + str(CONFIG_PATH))
+        print(dim("  \u2502 Run 'vst' from a git repo to connect to your Vast.ai instance."))
+        print(dim("  \u2502 Run 'vst -h' for all commands."))
+        print(dim("  \u2514 Edit ~/.vastly.json to customize.\n"))
+
     parser, parsers = _build_parser()
 
     # Handle help ourselves for clean, colored output

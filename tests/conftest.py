@@ -7,11 +7,11 @@ import pytest
 from vastly.instance import Instance
 
 
-def make_test_instance(name="test", id=1, **kwargs):
+def make_test_instance(name="test", inst_id=1, **kwargs):
     """Create an Instance with sensible defaults for testing."""
     defaults = dict(
-        name=name, id=id, dph_total=0.50, gpu_name="RTX 4090",
-        num_gpus=1, start_date=None, cached=False, status="running", alias=None,
+        name=name, id=inst_id, dph_total=0.50, gpu_name="RTX 4090",
+        num_gpus=1, start_date=None, status="running", alias=None,
     )
     defaults.update(kwargs)
     return Instance(**defaults)

@@ -42,7 +42,6 @@ def setup_instances(
     *,
     force_setup: bool = False,
     project_dir: Path | None = None,
-    copy_files: list[str] | None = None,
 ) -> list[str]:
     """Run remote setup on each instance. Returns list of successful host names."""
     git_name = subprocess.run(
@@ -89,17 +88,18 @@ def setup_instances(
             )
 
         reachable = False
+        print("connecting...", end="", flush=True)
         for attempt in range(1, 4):
             marker = run_ssh(name, marker_cmd)
             if marker.returncode == 0:
                 reachable = True
                 break
             if attempt < 3:
-                print(yellow("waiting..."), end="", flush=True)
+                print(yellow(f" retry {attempt + 1}/3..."), end="", flush=True)
                 time.sleep(5)
 
         if not reachable:
-            print(red("unreachable after 3 attempts."))
+            print(red(" unreachable. Check that the instance is running and your SSH key is loaded (ssh-add -l)."))
             continue
 
         # Parse probe output: marker JSON (before separator) and setup listing (after)
@@ -158,7 +158,10 @@ def setup_instances(
         # Setup is needed -- git identity required
         if not git_name or not git_email:
             print(red("setup needed but git identity not configured."))
-            print(red('  Run: git config --global user.name "Your Name"'))
+            if not git_name:
+                print(red('  Run: git config --global user.name "Your Name"'))
+            if not git_email:
+                print(red('  Run: git config --global user.email "you@example.com"'))
             continue
 
         print(cyan("running setup..."))
@@ -195,6 +198,7 @@ def setup_instances(
             continue
 
         # Copy non-git-tracked files to the remote instance
+        copy_files = config.get("copyFiles", [])
         if copy_files and project_dir:
             remote_base = f"{config['workspace']}/{repo_name}"
             for rel_path in copy_files:
@@ -230,6 +234,6 @@ def setup_instances(
     total = len(instances)
     ok = len(success_names)
     if total > 1 and ok < total:
-        print(yellow(f"Setup: {ok}/{total} instances ready."))
+        print(yellow(f"  {ok}/{total} instances set up successfully."))
 
     return success_names

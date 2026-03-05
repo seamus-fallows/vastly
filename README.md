@@ -64,8 +64,9 @@ vst -n                       # open IDE without cloning or installing
 vst list                     # list all instances (running, stopped, etc.)
 vst start [name]             # start a stopped instance, wait, then connect
 vst start -n                 # start without connecting
-vst stop [name | --all]      # stop an instance (or all)
-vst destroy [name | --all]   # destroy an instance (irreversible)
+vst stop [name | --all] [-y]  # stop an instance (or all)
+vst destroy [name | --all] [-y]  # destroy an instance (irreversible)
+vst ssh [name] [command...]  # SSH into an instance or run a remote command
 vst cp up|down <path>        # copy files to/from remote
 vst name <alias> [-i inst]   # assign a custom name to an instance
 vst config                   # show current configuration

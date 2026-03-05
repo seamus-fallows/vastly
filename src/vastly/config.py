@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 import vastly
+from vastly import yellow
 from vastly.errors import ConfigError
 
 
@@ -170,6 +171,11 @@ def _validate_config(config: Config) -> None:
                     f"Invalid config: 'portForwards[{i}].{field}' must be an int, "
                     f"got {actual}"
                 )
+            if not (1 <= entry[field] <= 65535):
+                raise ConfigError(
+                    f"Invalid config: 'portForwards[{i}].{field}' must be 1-65535, "
+                    f"got {entry[field]}"
+                )
 
     # postInstall, copyFiles: list of strings
     for key in ("postInstall", "copyFiles"):
@@ -192,11 +198,23 @@ def _warn_unknown_keys(raw: dict[str, Any], source: str) -> None:
     unknown = set(raw) - _KNOWN_KEYS
     if unknown:
         keys = ", ".join(sorted(unknown))
-        print(f"Warning: unrecognized config keys in {source}: {keys}", file=sys.stderr)
+        print(yellow(f"Warning: unknown config keys in {source}: {keys}"))
+
+
+def ensure_config(path: Path | None = None) -> bool:
+    """Create config from template if missing. Returns True if created."""
+    path = path or CONFIG_PATH
+    if path.exists():
+        return False
+    template = resources.files("vastly.data").joinpath(".vastly.template.json")
+    config_data = json.loads(template.read_text(encoding="utf-8"))
+    config_data["ide"] = _detect_ide()
+    path.write_text(json.dumps(config_data, indent=2) + "\n", encoding="utf-8")
+    return True
 
 
 def load_config(path: Path | None = None, *, project_dir: Path | None = None) -> Config:
-    """Load config from disk, creating from template if missing.
+    """Load config from disk.
 
     If ``project_dir`` is given and contains a ``.vastly.json``, project-specific
     keys (postInstall, installCommand, workspace, portForwards, copyFiles,
@@ -205,16 +223,6 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
     ignored.
     """
     path = path or CONFIG_PATH
-
-    if not path.exists():
-        template = resources.files("vastly.data").joinpath(".vastly.template.json")
-        config_data = json.loads(template.read_text(encoding="utf-8"))
-        config_data["ide"] = _detect_ide()
-        path.write_text(json.dumps(config_data, indent=2) + "\n", encoding="utf-8")
-        print(f"Created config at {path}\n")
-        print("Run 'vst' from a git repo to connect to your Vast.ai instance.")
-        print("It syncs SSH, clones your repo, installs deps, and opens your IDE.")
-        print("Run 'vst -h' for all commands.")
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))

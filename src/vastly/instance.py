@@ -12,11 +12,10 @@ from typing import Any
 
 import vastly
 from vastly.config import Config
-from vastly import dim, red, yellow
+from vastly import dim
 from vastly.errors import APIError, VastlyError
 from vastly.ssh import (
     SSH_CONFIG_DIR,
-    cached_config_names,
     clear_ssh_configs,
     ensure_ssh_include,
     find_available_port,
@@ -29,12 +28,11 @@ class Instance:
     """A Vast.ai GPU instance."""
 
     name: str
-    id: int | None  # None only for cached fallback instances
+    id: int
     dph_total: float
     gpu_name: str
     num_gpus: int
     start_date: float | None  # Unix timestamp
-    cached: bool
     status: str  # "running", "stopped", "exited", etc.
     alias: str | None
 
@@ -77,20 +75,21 @@ def fetch_instances() -> list[dict[str, Any]]:
             timeout=30,
         )
     except subprocess.TimeoutExpired:
-        raise APIError("vastai command timed out. Check your internet connection.")
+        raise APIError("vastai command timed out (network issue or Vast.ai outage).")
     if result.returncode != 0:
         if result.stderr.strip():
             raise APIError(f"vastai: {result.stderr.strip()}")
         raise APIError(
-            "vastai command failed. Is your API key set? Run: vastai set api-key <key>"
+            "vastai command failed (missing API key, network issue, or Vast.ai outage). "
+            "Run 'vastai set api-key <key>' if you haven't set one."
         )
     try:
         data = json.loads(result.stdout)
     except (json.JSONDecodeError, TypeError) as e:
-        raise APIError("vastai returned invalid data") from e
+        raise APIError("vastai returned invalid data. Try running 'vastai show instances --raw' to debug.") from e
 
     if not isinstance(data, list):
-        raise APIError("vastai returned invalid data")
+        raise APIError("vastai returned invalid data. Try running 'vastai show instances --raw' to debug.")
     return data
 
 
@@ -192,21 +191,7 @@ def sync_instances(config: Config) -> list[Instance]:
     ensure_ssh_include()
     SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(dim("Syncing instances..."))
-    try:
-        all_api = fetch_instances()
-    except APIError:
-        cached = cached_config_names()
-        if cached:
-            print(yellow("API unreachable -- using cached configs."))
-            return [
-                Instance(
-                    name=n, id=None, dph_total=0, gpu_name="", num_gpus=0,
-                    start_date=None, cached=True, status="running", alias=None,
-                )
-                for n in cached
-            ]
-        raise
+    all_api = fetch_instances()
 
     running = [i for i in all_api if i.get("cur_state") == "running"]
     non_running = [i for i in all_api if i.get("cur_state") != "running"]
@@ -261,7 +246,6 @@ def sync_instances(config: Config) -> list[Instance]:
             gpu_name=inst.get("gpu_name", ""),
             num_gpus=inst.get("num_gpus", 0),
             start_date=inst.get("start_date"),
-            cached=False,
             status="running",
             alias=None,
         ))
@@ -276,7 +260,6 @@ def sync_instances(config: Config) -> list[Instance]:
             gpu_name=inst.get("gpu_name", ""),
             num_gpus=inst.get("num_gpus", 0),
             start_date=inst.get("start_date"),
-            cached=False,
             status=inst.get("cur_state", "unknown"),
             alias=None,
         ))
@@ -292,8 +275,6 @@ def sync_instances(config: Config) -> list[Instance]:
 
     # Write alias SSH configs (running only) and attach aliases to all instances
     for r in results:
-        if r.id is None:
-            continue
         inst_id = str(r.id)
         alias = aliases.get(inst_id)
         if alias:
@@ -349,34 +330,21 @@ def show_table(instances: list[Instance]) -> None:
         print()
         return
 
-    # Build rows: (label, cost, right_col, is_running, is_cached)
-    rows: list[tuple[str, str, str, bool, bool]] = []
+    # Build rows: (label, cost, right_col, is_running)
+    rows: list[tuple[str, str, str, bool]] = []
     for inst in instances:
-        if inst.cached:
-            rows.append((inst.name, "", "(cached)", False, True))
+        label = inst.display_name
+        cost = f"${inst.dph_total:.2f}/hr"
+        if inst.status == "running":
+            rows.append((label, cost, f"{format_uptime(inst.start_date)} uptime", True))
         else:
-            label = inst.display_name
-            cost = f"${inst.dph_total:.2f}/hr"
-            if inst.status == "running":
-                rows.append(
-                    (
-                        label,
-                        cost,
-                        f"{format_uptime(inst.start_date)} uptime",
-                        True,
-                        False,
-                    )
-                )
-            else:
-                rows.append((label, cost, inst.status, False, False))
+            rows.append((label, cost, inst.status, False))
 
     label_w = max(len(r[0]) for r in rows)
-    cost_w = max((len(r[1]) for r in rows), default=0)
+    cost_w = max(len(r[1]) for r in rows)
 
-    for label, cost, right, is_running, is_cached in rows:
-        if is_cached:
-            print(f"  {label.ljust(label_w)}  {dim('(cached)')}")
-        elif is_running:
+    for label, cost, right, is_running in rows:
+        if is_running:
             print(f"  {label.ljust(label_w)}  {cost.ljust(cost_w)}  {right}")
         else:
             print(dim(f"  {label.ljust(label_w)}  {cost.ljust(cost_w)}  {right}"))
@@ -394,6 +362,9 @@ def select_instance(
     When allow_all is True, shows an "[a] All" option for multi-instance selection.
     Always returns a non-empty list. Raises VastlyError on cancel or invalid input.
     """
+    if not instances:
+        raise VastlyError("No instances available.")
+
     if name:
         match = [i for i in instances if i.name == name or i.alias == name]
         if not match:
@@ -419,16 +390,16 @@ def select_instance(
     try:
         choice = input("Choice: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
-        raise VastlyError("No instance selected.")
+        raise VastlyError("Cancelled.")
 
     if allow_all and choice == "a":
         return list(instances)
 
     if not choice.isdigit():
-        raise VastlyError("No instance selected.")
+        raise VastlyError("Invalid choice.")
 
     idx = int(choice)
     if idx < 1 or idx > len(instances):
-        raise VastlyError("No instance selected.")
+        raise VastlyError("Invalid choice.")
 
     return [instances[idx - 1]]
