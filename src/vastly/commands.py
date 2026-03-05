@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+from difflib import get_close_matches
 from pathlib import Path, PurePosixPath
 
 import vastly
@@ -672,13 +673,39 @@ def cmd_ssh(args: argparse.Namespace) -> None:
     running = [i for i in all_instances if i.status == "running"]
 
     if not running:
-        stopped = [i for i in all_instances if i.status != "running"]
-        if stopped:
+        startable = [i for i in all_instances if i.status in STOPPED_STATES]
+        if not startable:
+            raise VastlyError("No Vast instances found.")
+
+        if args.name:
+            match = [
+                i for i in startable
+                if i.name == args.name or i.alias == args.name
+            ]
+            to_start = [match[0]] if match else None
+        else:
+            to_start = None
+
+        if to_start is None:
+            if len(startable) == 1:
+                to_start = [startable[0]]
+                print(yellow(f"  No running instances. Starting {to_start[0].display_name}..."))
+            else:
+                print(yellow("  No running instances. Select one to start:"))
+                show_table(startable)
+                to_start = [select_instance(startable)[0]]
+
+        for inst in to_start:
+            _vastai_action("start", inst)
+        for inst in to_start:
+            _poll_for_running(str(inst.id))
+
+        all_instances = sync_instances(config)
+        running = [i for i in all_instances if i.status == "running"]
+        if not running:
             raise VastlyError(
-                f"No running instances. {len(stopped)} stopped/exited. "
-                "Use 'vst list' to see all, 'vst start' to restart."
+                "Instance started but not reachable. Check Vast.ai dashboard."
             )
-        raise VastlyError("No Vast instances found.")
 
     # Smart dispatch: if args.name doesn't match any running instance, check
     # stopped instances (for a helpful error) before falling back to treating
@@ -687,37 +714,74 @@ def cmd_ssh(args: argparse.Namespace) -> None:
     if args.name:
         match = [i for i in running if i.name == args.name or i.alias == args.name]
         if match:
-            inst = match[0]
+            selected = [match[0]]
         else:
-            # Check if name matches a non-running instance
-            match_all = [
+            # Check if name matches a stopped instance -- auto-start it
+            match_stopped = [
                 i for i in all_instances
-                if i.name == args.name or i.alias == args.name
+                if (i.name == args.name or i.alias == args.name)
+                and i.status in STOPPED_STATES
             ]
-            if match_all:
+            if match_stopped:
+                inst = match_stopped[0]
+                print(yellow(f"  '{args.name}' is stopped. Starting {inst.display_name}..."))
+                _vastai_action("start", inst)
+                _poll_for_running(str(inst.id))
+                all_instances = sync_instances(config)
+                running = [i for i in all_instances if i.status == "running"]
+                match = [i for i in running if i.name == args.name or i.alias == args.name]
+                if not match:
+                    raise VastlyError("Instance started but not reachable.")
+                selected = [match[0]]
+            elif [i for i in all_instances if i.name == args.name or i.alias == args.name]:
+                # Exists but in a non-startable state
+                found = [i for i in all_instances if i.name == args.name or i.alias == args.name][0]
                 raise VastlyError(
-                    f"'{args.name}' is {match_all[0].status}. "
-                    f"Use 'vst start {args.name}' to start it."
+                    f"'{args.name}' is {found.status} and cannot be started."
                 )
-            # No match at all -- treat as remote command
-            remote_cmd = [args.name] + remote_cmd
-            inst = select_instance(running)[0]
+            else:
+                # No match at all -- check for typos before treating as command
+                all_names = []
+                for i in all_instances:
+                    all_names.append(i.name)
+                    if i.alias:
+                        all_names.append(i.alias)
+                close = get_close_matches(args.name, all_names, n=1, cutoff=0.5)
+                if close:
+                    raise VastlyError(
+                        f"No instance named '{args.name}'. Did you mean '{close[0]}'?"
+                    )
+                # Treat as remote command
+                remote_cmd = [args.name] + remote_cmd
+                selected = select_instance(running, allow_all=True)
     else:
-        inst = select_instance(running)[0]
+        selected = select_instance(running, allow_all=True)
 
-    ssh_cmd = ["ssh", *SSH_OPTS, inst.name]
-    if remote_cmd:
-        ssh_cmd.extend(remote_cmd)
+    # Multiple instances only makes sense with a remote command
+    if len(selected) > 1 and not remote_cmd:
+        raise VastlyError("Cannot open interactive SSH to multiple instances. Specify a command or pick one.")
 
-    vastly.verbose(f"ssh command: {' '.join(ssh_cmd)}")
-
-    # Flush stdout before handing off to subprocess so output ordering is correct
     sys.stdout.flush()
 
-    # On Unix, replace the process entirely so Ctrl+C, terminal resizing, etc.
-    # work natively. On Windows, subprocess is the only option.
-    if sys.platform == "win32":
-        result = subprocess.run(ssh_cmd)
-        sys.exit(result.returncode)
+    if len(selected) == 1 and not remote_cmd:
+        # Interactive SSH -- replace the process for native terminal behavior
+        ssh_cmd = ["ssh", *SSH_OPTS, selected[0].name]
+        vastly.verbose(f"ssh command: {' '.join(ssh_cmd)}")
+        if sys.platform == "win32":
+            result = subprocess.run(ssh_cmd)
+            sys.exit(result.returncode)
+        else:
+            os.execvp("ssh", ssh_cmd)
     else:
-        os.execvp("ssh", ssh_cmd)
+        # Run command on one or more instances
+        failed = 0
+        for inst in selected:
+            ssh_cmd = ["ssh", *SSH_OPTS, inst.name, *remote_cmd]
+            vastly.verbose(f"ssh command: {' '.join(ssh_cmd)}")
+            if len(selected) > 1:
+                print(green(f"  ── {inst.display_name} ──"))
+            result = subprocess.run(ssh_cmd)
+            if result.returncode != 0:
+                failed += 1
+        if failed:
+            sys.exit(1)

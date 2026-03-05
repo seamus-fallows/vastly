@@ -3058,9 +3058,7 @@ class TestCmdSsh:
             verbose=False,
         )
 
-        with pytest.raises(SystemExit) as exc_info:
-            cmd_ssh(args)
-        assert exc_info.value.code == 0
+        cmd_ssh(args)
 
         assert "nvidia-smi" in captured_cmd
         assert "gpu-box" in captured_cmd
@@ -3096,6 +3094,7 @@ class TestCmdSsh:
             cmd_ssh(args)
         assert exc_info.value.code == 0
 
+        # Interactive SSH: on win32, replaces process via sys.exit
         assert "gpu-b" in captured_cmd
         assert "gpu-a" not in captured_cmd
 
@@ -3158,9 +3157,7 @@ class TestCmdSsh:
             remote_cmd=[], name="nvidia-smi", verbose=False,
         )
 
-        with pytest.raises(SystemExit) as exc_info:
-            cmd_ssh(args)
-        assert exc_info.value.code == 0
+        cmd_ssh(args)
 
         assert "gpu-box" in captured_cmd
         assert "nvidia-smi" in captured_cmd
@@ -3192,9 +3189,7 @@ class TestCmdSsh:
             remote_cmd=["nvidia-smi"], name="train", verbose=False,
         )
 
-        with pytest.raises(SystemExit) as exc_info:
-            cmd_ssh(args)
-        assert exc_info.value.code == 0
+        cmd_ssh(args)
 
         assert "gpu-a" in captured_cmd
         assert "nvidia-smi" in captured_cmd

@@ -251,8 +251,10 @@ for conda_dir in /opt/conda /opt/miniforge3; do
 done
 
 # Also activate venv if it exists (venv PATH takes priority over conda)
+# Guard with VIRTUAL_ENV check to avoid double-activation when the container
+# image already activates the same venv in its default .bashrc
 if [[ -x /venv/main/bin/python ]]; then
-    VENV_LINE="export VIRTUAL_ENV=/venv/main; export PATH=\"/venv/main/bin:\$PATH\" ${BASHRC_MARKER}"
+    VENV_LINE="[[ \"\$VIRTUAL_ENV\" != \"/venv/main\" ]] && export VIRTUAL_ENV=/venv/main && export PATH=\"/venv/main/bin:\$PATH\" ${BASHRC_MARKER}"
 fi
 
 {
