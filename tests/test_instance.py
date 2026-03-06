@@ -28,7 +28,7 @@ class TestFetchInstances:
     def test_returns_list_on_success(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0], 0, stdout='[{"id": 1}]', stderr=""
             ),
         )
@@ -37,7 +37,7 @@ class TestFetchInstances:
     def test_raises_on_nonzero_exit_with_stderr(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0], 1, stdout="", stderr="auth error"
             ),
         )
@@ -47,7 +47,7 @@ class TestFetchInstances:
     def test_raises_api_key_hint_when_stderr_empty(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(a[0], 1, stdout="", stderr=""),
+            lambda *a, **_kw: subprocess.CompletedProcess(a[0], 1, stdout="", stderr=""),
         )
         with pytest.raises(APIError, match="API key"):
             fetch_instances()
@@ -55,7 +55,7 @@ class TestFetchInstances:
     def test_raises_on_invalid_json(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0], 0, stdout="not json", stderr=""
             ),
         )
@@ -65,7 +65,7 @@ class TestFetchInstances:
     def test_raises_when_json_is_object(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0], 0, stdout='{"error": "msg"}', stderr=""
             ),
         )
@@ -75,7 +75,7 @@ class TestFetchInstances:
     def test_returns_empty_list(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0], 0, stdout="[]", stderr=""
             ),
         )
@@ -84,11 +84,11 @@ class TestFetchInstances:
 
 class TestSyncInstances:
     @pytest.fixture(autouse=True)
-    def _mock_deps(self, monkeypatch, ssh_config_dir):
+    def _mock_deps(self, monkeypatch, ssh_config_dir):  # noqa: ARG002
         """Mock the external deps that touch the filesystem or network."""
         monkeypatch.setattr("vastly.instance.ensure_ssh_include", lambda: None)
         monkeypatch.setattr("vastly.instance.prune_ssh_configs", lambda keep: None)
-        monkeypatch.setattr("vastly.instance.write_ssh_config", lambda *a, **kw: None)
+        monkeypatch.setattr("vastly.instance.write_ssh_config", lambda *_a, **_kw: None)
 
     def test_syncs_running_instances(self, monkeypatch):
         monkeypatch.setattr(
@@ -159,7 +159,7 @@ class TestSyncInstances:
         writes = []
         monkeypatch.setattr(
             "vastly.instance.write_ssh_config",
-            lambda *a, **kw: writes.append(kw),
+            lambda *_a, **kw: writes.append(kw),
         )
         sync_instances(make_test_config())
         assert len(writes) == 2
@@ -174,7 +174,7 @@ class TestSyncInstances:
         writes = []
         monkeypatch.setattr(
             "vastly.instance.write_ssh_config",
-            lambda *a, **kw: writes.append(kw),
+            lambda *_a, **kw: writes.append(kw),
         )
         sync_instances(make_test_config(sshUser="ubuntu", sshKeyPath="/my/key"))
         assert writes[0]["user"] == "ubuntu"
@@ -232,7 +232,9 @@ _MINIMAL_CONFIG = make_test_config(portForwards=[])
 
 def _make_api_response(*instances):
     """Build a fake subprocess.run result returning JSON instance data."""
-    return subprocess.CompletedProcess([], 0, stdout=json.dumps(list(instances)), stderr="")
+    return subprocess.CompletedProcess(
+        [], 0, stdout=json.dumps(list(instances)), stderr=""
+    )
 
 
 # ── TestSelectInstance ───────────────────────────────────────────────
@@ -841,7 +843,7 @@ class TestSyncInstancesIntegration:
         ]
         monkeypatch.setattr(
             "vastly.instance.subprocess.run",
-            lambda *a, **kw: _make_api_response(*api_data),
+            lambda *_a, **_kw: _make_api_response(*api_data),
         )
 
         results = sync_instances(_MINIMAL_CONFIG)
@@ -880,7 +882,7 @@ class TestSyncInstancesIntegration:
         ]
         monkeypatch.setattr(
             "vastly.instance.subprocess.run",
-            lambda *a, **kw: _make_api_response(*api_data),
+            lambda *_a, **_kw: _make_api_response(*api_data),
         )
 
         results = sync_instances(_MINIMAL_CONFIG)
@@ -912,7 +914,7 @@ class TestSyncInstancesIntegration:
         ]
         monkeypatch.setattr(
             "vastly.instance.subprocess.run",
-            lambda *a, **kw: _make_api_response(*api_data),
+            lambda *_a, **_kw: _make_api_response(*api_data),
         )
 
         results = sync_instances(_MINIMAL_CONFIG)
@@ -1057,7 +1059,12 @@ class TestGpuNameSanitization:
         assert "-" not in name or name.count("-") == 1  # only the geo separator
 
     def test_strips_parentheses_and_slashes(self):
-        inst = {"gpu_name": "A100 (80GB)/PCIe", "num_gpus": 2, "geolocation": "", "id": 1}
+        inst = {
+            "gpu_name": "A100 (80GB)/PCIe",
+            "num_gpus": 2,
+            "geolocation": "",
+            "id": 1,
+        }
         name = build_instance_name(inst, set())
         assert "(" not in name
         assert ")" not in name

@@ -55,7 +55,8 @@ class TestSetupInstances:
                 if already_setup:
                     marker = '{"timestamp": "2024-01-01"}'
                     return subprocess.CompletedProcess(
-                        [], 0,
+                        [],
+                        0,
                         stdout=f"{marker}\n{_PROBE_SEP}\nr.json\n",
                         stderr="",
                     )
@@ -369,11 +370,13 @@ class TestSetupMarker:
         def fake_ssh(name, cmd, **kwargs):
             ssh_calls.append(cmd)
             if "cat ~/.vastly/setup/" in cmd:
-                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=probe_output, stderr=""
+                )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
+        monkeypatch.setattr("vastly.remote.run_scp", lambda *_a, **_kw: None)
 
         instances = [_inst(name="1xA100-US")]
         config = make_test_config()
@@ -395,11 +398,13 @@ class TestSetupMarker:
         def fake_ssh(name, cmd, **kwargs):
             ssh_calls.append(cmd)
             if "cat ~/.vastly/setup/" in cmd:
-                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=probe_output, stderr=""
+                )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
+        monkeypatch.setattr("vastly.remote.run_scp", lambda *_a, **_kw: None)
 
         instances = [_inst(name="1xA100-US")]
         config = make_test_config()
@@ -416,7 +421,9 @@ class TestSetupMarker:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=probe_output, stderr=""
+                )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         scp_calls = []
@@ -429,7 +436,9 @@ class TestSetupMarker:
         monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
         monkeypatch.setattr(
             "vastly.remote.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="Test User\n", stderr=""),
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [], 0, stdout="Test User\n", stderr=""
+            ),
         )
 
         instances = [_inst(name="1xA100-US")]
@@ -485,11 +494,13 @@ class TestRepoMismatchWarning:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=probe_output, stderr=""
+                )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
+        monkeypatch.setattr("vastly.remote.run_scp", lambda *_a, **_kw: None)
         monkeypatch.setattr("builtins.input", lambda _: "n")
 
         instances = [_inst(name="1xA100-US")]
@@ -507,7 +518,9 @@ class TestRepoMismatchWarning:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=probe_output, stderr=""
+                )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         scp_calls = []
@@ -521,7 +534,9 @@ class TestRepoMismatchWarning:
         monkeypatch.setattr("builtins.input", lambda _: "y")
         monkeypatch.setattr(
             "vastly.remote.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="Test User\n", stderr=""),
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [], 0, stdout="Test User\n", stderr=""
+            ),
         )
 
         instances = [_inst(name="1xA100-US")]
@@ -541,7 +556,9 @@ class TestRepoMismatchWarning:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=probe_output, stderr=""
+                )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         scp_calls = []
@@ -559,7 +576,9 @@ class TestRepoMismatchWarning:
         )
         monkeypatch.setattr(
             "vastly.remote.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="Test User\n", stderr=""),
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [], 0, stdout="Test User\n", stderr=""
+            ),
         )
 
         instances = [_inst(name="1xA100-US")]
@@ -578,14 +597,16 @@ class TestRepoMismatchWarning:
 
         def fake_ssh(name, cmd, **kwargs):
             if "cat ~/.vastly/setup/" in cmd:
-                return subprocess.CompletedProcess([], 0, stdout=probe_output, stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout=probe_output, stderr=""
+                )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         def raise_eof(_):
             raise EOFError
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", lambda *a, **kw: None)
+        monkeypatch.setattr("vastly.remote.run_scp", lambda *_a, **_kw: None)
         monkeypatch.setattr("builtins.input", raise_eof)
 
         instances = [_inst(name="1xA100-US")]
@@ -609,7 +630,10 @@ class TestHttpsRemoteWarning:
         from vastly.commands import cmd_connect
 
         monkeypatch.setattr("vastly.commands._git_root", lambda: Path("/repo"))
-        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: make_test_config(portForwards=[]))
+        monkeypatch.setattr(
+            "vastly.commands.load_config",
+            lambda **kw: make_test_config(portForwards=[]),
+        )
         monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
             "vastly.commands.sync_instances",
@@ -626,13 +650,20 @@ class TestHttpsRemoteWarning:
             "vastly.commands._local_repo_info",
             lambda _: ("https://github.com/user/repo.git", "repo"),
         )
-        monkeypatch.setattr("vastly.commands.setup_instances", lambda *a, **kw: ["test"])
+        monkeypatch.setattr(
+            "vastly.commands.setup_instances", lambda *_a, **_kw: ["test"]
+        )
         monkeypatch.setattr("vastly.commands.open_ide", lambda *a: None)
         monkeypatch.setattr("vastly.update.check_for_update", lambda: None)
 
         import argparse
+
         args = argparse.Namespace(
-            name=None, no_setup=False, force_setup=False, all=False, verbose=False,
+            name=None,
+            no_setup=False,
+            force_setup=False,
+            all=False,
+            verbose=False,
         )
         cmd_connect(args)
 

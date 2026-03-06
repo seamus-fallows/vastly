@@ -24,6 +24,7 @@ _MINIMAL_CONFIG = make_test_config(portForwards=[])
 # Common monkeypatch helpers
 # ---------------------------------------------------------------------------
 
+
 def _patch_base(monkeypatch, *, git_root=None, config=None):
     """Patch the common prerequisites shared by most command functions."""
     monkeypatch.setattr("vastly.commands._git_root", lambda: git_root)
@@ -135,7 +136,7 @@ class TestDoConnectOrchestration:
         setup_calls = []
         monkeypatch.setattr(
             "vastly.commands.setup_instances",
-            lambda *a, **kw: (setup_calls.append(a[0]), [a[0][0].name])[1],
+            lambda *a, **_kw: (setup_calls.append(a[0]), [a[0][0].name])[1],
         )
 
         ide_calls = []
@@ -166,7 +167,9 @@ class TestDoConnectOrchestration:
         )
         monkeypatch.setattr(
             "vastly.commands._poll_for_running",
-            lambda inst_id, display_name="", *, queued=False: polled_ids.append(inst_id),
+            lambda inst_id, display_name="", *, queued=False: polled_ids.append(
+                inst_id
+            ),
         )
 
         call_count = [0]
@@ -180,7 +183,7 @@ class TestDoConnectOrchestration:
         monkeypatch.setattr("vastly.commands.sync_instances", fake_sync)
         monkeypatch.setattr(
             "vastly.commands.setup_instances",
-            lambda *a, **kw: [a[0][0].name],
+            lambda *a, **_kw: [a[0][0].name],
         )
         monkeypatch.setattr("vastly.commands.open_ide", lambda *a: None)
         monkeypatch.setattr("vastly.update.check_for_update", lambda: None)
@@ -242,7 +245,7 @@ class TestDoConnectOrchestration:
         setup_calls = []
         monkeypatch.setattr(
             "vastly.commands.setup_instances",
-            lambda *a, **kw: setup_calls.append(True),
+            lambda *_a, **_kw: setup_calls.append(True),
         )
 
         ide_calls = []
@@ -292,7 +295,7 @@ class TestDoConnectOrchestration:
         # setup_instances returns empty list (all failed)
         monkeypatch.setattr(
             "vastly.commands.setup_instances",
-            lambda *a, **kw: [],
+            lambda *_a, **_kw: [],
         )
 
         ide_calls = []
@@ -325,11 +328,13 @@ class TestDoConnectOrchestration:
         # Only gpu-a succeeds setup
         monkeypatch.setattr(
             "vastly.commands.setup_instances",
-            lambda *a, **kw: ["gpu-a"],
+            lambda *_a, **_kw: ["gpu-a"],
         )
         monkeypatch.setattr(
             "vastly.commands.select_instance",
-            lambda instances, name=None, allow_all=False, prompt="Select instance:": instances,
+            lambda instances, name=None, allow_all=False, prompt="Select instance:": (
+                instances
+            ),
         )
 
         ide_calls = []
@@ -359,7 +364,7 @@ class TestDoConnectOrchestration:
         )
         monkeypatch.setattr(
             "vastly.commands.setup_instances",
-            lambda *a, **kw: [inst.name for inst in a[0]],
+            lambda *a, **_kw: [inst.name for inst in a[0]],
         )
 
         ide_calls = []
@@ -386,7 +391,7 @@ class TestDoConnectOrchestration:
         )
         monkeypatch.setattr(
             "vastly.commands._poll_for_running",
-            lambda *a, **kw: None,
+            lambda *_a, **_kw: None,
         )
 
         call_count = [0]
@@ -400,7 +405,7 @@ class TestDoConnectOrchestration:
         monkeypatch.setattr("vastly.commands.sync_instances", fake_sync)
         monkeypatch.setattr(
             "vastly.commands.setup_instances",
-            lambda *a, **kw: [a[0][0].name],
+            lambda *a, **_kw: [a[0][0].name],
         )
         monkeypatch.setattr("vastly.commands.open_ide", lambda *a: None)
         monkeypatch.setattr("vastly.update.check_for_update", lambda: None)
@@ -492,8 +497,9 @@ class TestCmdStartOrchestration:
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
-                [], 0,
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [],
+                0,
                 stdout='{"cur_state": "running", "actual_status": "running"}',
                 stderr="",
             ),
@@ -549,8 +555,9 @@ class TestCmdStartOrchestration:
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
-                [], 0,
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [],
+                0,
                 stdout='{"cur_state": "running", "actual_status": "running"}',
                 stderr="",
             ),
@@ -578,7 +585,7 @@ class TestCmdStartOrchestration:
         polled = []
         monkeypatch.setattr(
             "vastly.commands._poll_for_running",
-            lambda *a, **kw: polled.append(True),
+            lambda *_a, **_kw: polled.append(True),
         )
         connect_calls = []
         monkeypatch.setattr(
@@ -661,8 +668,9 @@ class TestCmdStartOrchestration:
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
-                [], 0,
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [],
+                0,
                 stdout='{"cur_state": "running", "actual_status": "running"}',
                 stderr="",
             ),
@@ -893,7 +901,8 @@ class TestCmdDestroyOrchestration:
 
         monkeypatch.setattr("vastly.commands._confirm", fake_confirm)
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy", lambda inst: None,
+            "vastly.commands._vastai_destroy",
+            lambda inst: None,
         )
 
         args = argparse.Namespace(name=None, all=False, yes=False, verbose=False)

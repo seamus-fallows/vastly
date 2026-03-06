@@ -69,9 +69,7 @@ class TestCheckPrerequisites:
     def test_falls_back_to_other_ide(self, monkeypatch):
         """If configured IDE is missing but the other is installed, fall back."""
         monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-        monkeypatch.setattr(
-            "vastly.commands.check_ide", lambda x: x == "cursor"
-        )
+        monkeypatch.setattr("vastly.commands.check_ide", lambda x: x == "cursor")
         result = _check_prerequisites(need_ide=True, ide="code")
         assert result == "cursor"
 
@@ -93,7 +91,7 @@ class TestLocalRepoInfo:
     def test_returns_https_url_and_repo_name(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0], 0, stdout="https://github.com/user/my-project.git\n", stderr=""
             ),
         )
@@ -103,7 +101,7 @@ class TestLocalRepoInfo:
     def test_returns_none_when_not_in_git_repo(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0], 128, stdout="", stderr="fatal: not a git repository"
             ),
         )
@@ -112,7 +110,7 @@ class TestLocalRepoInfo:
     def test_prints_error_for_non_repo_stderr(self, monkeypatch, capsys):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0], 1, stdout="", stderr="fatal: No such remote 'upstream'"
             ),
         )
@@ -122,7 +120,7 @@ class TestLocalRepoInfo:
     def test_suppresses_not_a_git_repo_message(self, monkeypatch, capsys):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0],
                 128,
                 stdout="",
@@ -137,12 +135,12 @@ class TestLocalRepoInfo:
     def test_returns_none_on_empty_stdout(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(a[0], 0, stdout="", stderr=""),
+            lambda *a, **_kw: subprocess.CompletedProcess(a[0], 0, stdout="", stderr=""),
         )
         assert _local_repo_info("origin") is None
 
     def test_returns_none_when_git_binary_missing(self, monkeypatch):
-        def raise_fnf(*a, **kw):
+        def raise_fnf(*_a, **_kw):
             raise FileNotFoundError
 
         monkeypatch.setattr("subprocess.run", raise_fnf)
@@ -151,7 +149,7 @@ class TestLocalRepoInfo:
     def test_preserves_already_ssh_url(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
+            lambda *a, **_kw: subprocess.CompletedProcess(
                 a[0], 0, stdout="git@github.com:user/repo.git\n", stderr=""
             ),
         )

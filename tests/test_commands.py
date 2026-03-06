@@ -30,7 +30,7 @@ class TestStopDestroy:
 
         captured_cmd = []
 
-        def fake_run(cmd, **kwargs):
+        def fake_run(cmd, **_kwargs):
             captured_cmd.extend(cmd)
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
@@ -48,7 +48,9 @@ class TestStopDestroy:
 
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 1, stdout="", stderr="error msg"),
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [], 1, stdout="", stderr="error msg"
+            ),
         )
 
         inst = _inst(name="test", id=1)
@@ -85,7 +87,11 @@ class TestCp:
 
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         args = argparse.Namespace(
-            direction="down", paths=["file.txt"], config=False, instance=None, verbose=False,
+            direction="down",
+            paths=["file.txt"],
+            config=False,
+            instance=None,
+            verbose=False,
         )
         with pytest.raises(VastlyError, match="Not in a git repo"):
             cmd_cp(args)
@@ -102,7 +108,11 @@ class TestCp:
         monkeypatch.setattr("vastly.commands._local_repo_info", lambda _: None)
 
         args = argparse.Namespace(
-            direction="down", paths=["file.txt"], config=False, instance=None, verbose=False,
+            direction="down",
+            paths=["file.txt"],
+            config=False,
+            instance=None,
+            verbose=False,
         )
         with pytest.raises(VastlyError, match="Could not determine repo name"):
             cmd_cp(args)
@@ -116,7 +126,9 @@ class TestCp:
             lambda **kw: make_test_config(portForwards=[]),
         )
         monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
-        monkeypatch.setattr("vastly.commands._local_repo_info", lambda _: ("url", "repo"))
+        monkeypatch.setattr(
+            "vastly.commands._local_repo_info", lambda _: ("url", "repo")
+        )
         monkeypatch.setattr(
             "vastly.commands.get_running_instances",
             lambda _: [
@@ -125,7 +137,11 @@ class TestCp:
         )
 
         args = argparse.Namespace(
-            direction="up", paths=["nonexistent.txt"], config=False, instance=None, verbose=False,
+            direction="up",
+            paths=["nonexistent.txt"],
+            config=False,
+            instance=None,
+            verbose=False,
         )
         with pytest.raises(VastlyError, match="No files were copied"):
             cmd_cp(args)
@@ -266,7 +282,9 @@ class TestCmdStart:
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 5)
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout='{"cur_state": "loading"}', stderr=""),
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [], 0, stdout='{"cur_state": "loading"}', stderr=""
+            ),
         )
 
         args = argparse.Namespace(name=None, no_connect=False, verbose=False)
@@ -295,11 +313,18 @@ class TestCmdStart:
         # API still says stopped (queued), then transitions to running
         poll_count = [0]
 
-        def fake_run(*a, **kw):
+        def fake_run(*_a, **_kw):
             poll_count[0] += 1
             if poll_count[0] == 1:
-                return subprocess.CompletedProcess([], 0, stdout='{"cur_state": "stopped"}', stderr="")
-            return subprocess.CompletedProcess([], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr="")
+                return subprocess.CompletedProcess(
+                    [], 0, stdout='{"cur_state": "stopped"}', stderr=""
+                )
+            return subprocess.CompletedProcess(
+                [],
+                0,
+                stdout='{"cur_state": "running", "actual_status": "running"}',
+                stderr="",
+            )
 
         monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
         monkeypatch.setattr("vastly.commands._do_connect", lambda **kw: None)
@@ -387,9 +412,11 @@ class TestCmdStopLifecycle:
         )
 
         actions = []
-        monkeypatch.setattr("vastly.commands._vastai_action", lambda a, i: actions.append(a))
+        monkeypatch.setattr(
+            "vastly.commands._vastai_action", lambda a, i: actions.append(a)
+        )
 
-        args = argparse.Namespace(name="a", all=False, yes=False, verbose=False)
+        args = argparse.Namespace(name="a", all=False, yes=True, verbose=False)
         cmd_stop(args)
 
         assert actions == ["stop"]
@@ -470,7 +497,9 @@ class TestVastaiStart:
 
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="starting instance", stderr=""),
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [], 0, stdout="starting instance", stderr=""
+            ),
         )
 
         queued = _vastai_start(_inst(name="test", id=1))
@@ -484,8 +513,11 @@ class TestVastaiStart:
 
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
-                [], 0, stdout="Required resources are currently unavailable, state change queued.", stderr=""
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [],
+                0,
+                stdout="Required resources are currently unavailable, state change queued.",
+                stderr="",
             ),
         )
 
@@ -600,7 +632,11 @@ class TestConnectStoppedInstance:
         )
 
         args = argparse.Namespace(
-            name="2xA100-US", no_setup=False, force_setup=False, all=False, verbose=False,
+            name="2xA100-US",
+            no_setup=False,
+            force_setup=False,
+            all=False,
+            verbose=False,
         )
         with pytest.raises(VastlyError, match="inactive.*vst start"):
             cmd_connect(args)
@@ -629,10 +665,14 @@ class TestConnectStoppedInstance:
             "vastly.commands._vastai_start",
             lambda inst: (started_ids.append(inst.id), False)[1],
         )
-        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *a, **kw: None)
+        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *_a, **_kw: None)
 
         args = argparse.Namespace(
-            name=None, no_setup=True, force_setup=False, all=False, verbose=False,
+            name=None,
+            no_setup=True,
+            force_setup=False,
+            all=False,
+            verbose=False,
         )
 
         # After auto-start, sync returns running instance
@@ -780,9 +820,7 @@ class TestPromotedConnectFlags:
         captured = {}
         monkeypatch.setattr(
             "vastly.cli.cmd_connect",
-            lambda args: captured.update(
-                name=args.name, force_setup=args.force_setup
-            ),
+            lambda args: captured.update(name=args.name, force_setup=args.force_setup),
         )
 
         main(["-f", "my-gpu"])
@@ -797,9 +835,7 @@ class TestPromotedConnectFlags:
         captured = {}
         monkeypatch.setattr(
             "vastly.cli.cmd_connect",
-            lambda args: captured.update(
-                name=args.name, force_setup=args.force_setup
-            ),
+            lambda args: captured.update(name=args.name, force_setup=args.force_setup),
         )
 
         main(["my-gpu", "-f"])
@@ -893,9 +929,7 @@ class TestCmdStopIntegration:
             lambda action, inst: action_calls.append((action, inst)),
         )
 
-        args = argparse.Namespace(
-            command="stop", name=None, all=False, verbose=False
-        )
+        args = argparse.Namespace(command="stop", name=None, all=False, yes=True, verbose=False)
         cmd_stop(args)
 
         assert len(action_calls) == 1
@@ -923,7 +957,7 @@ class TestCmdStopIntegration:
         )
 
         args = argparse.Namespace(
-            command="stop", name="test-gpu", all=False, verbose=False
+            command="stop", name="test-gpu", all=False, yes=True, verbose=False
         )
         cmd_stop(args)
 
@@ -943,7 +977,9 @@ class TestCmdSsh:
         """cmd_ssh should build an SSH command with the right host and options."""
         from vastly.commands import cmd_ssh
 
-        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+        )
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
@@ -956,12 +992,16 @@ class TestCmdSsh:
         monkeypatch.setattr("sys.platform", "win32")
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
-            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda cmd, **_kw: (
+                (captured_cmd.extend(cmd), None)[1]
+                or subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            ),
         )
 
         args = argparse.Namespace(
-            command="ssh", name=None, verbose=False,
+            command="ssh",
+            name=None,
+            verbose=False,
         )
         args.remote_cmd = []  # no remote command -- REMAINDER is empty list
 
@@ -976,7 +1016,9 @@ class TestCmdSsh:
         """cmd_ssh should append the remote command to the SSH invocation."""
         from vastly.commands import cmd_ssh
 
-        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+        )
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
@@ -988,8 +1030,10 @@ class TestCmdSsh:
         monkeypatch.setattr("sys.platform", "win32")
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
-            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda cmd, **_kw: (
+                (captured_cmd.extend(cmd), None)[1]
+                or subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            ),
         )
 
         args = argparse.Namespace(
@@ -1007,7 +1051,9 @@ class TestCmdSsh:
         """cmd_ssh should select the named instance when provided."""
         from vastly.commands import cmd_ssh
 
-        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+        )
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
@@ -1022,12 +1068,16 @@ class TestCmdSsh:
         monkeypatch.setattr("sys.platform", "win32")
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
-            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda cmd, **_kw: (
+                (captured_cmd.extend(cmd), None)[1]
+                or subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            ),
         )
 
         args = argparse.Namespace(
-            remote_cmd=[], name="gpu-b", verbose=False,
+            remote_cmd=[],
+            name="gpu-b",
+            verbose=False,
         )
 
         with pytest.raises(SystemExit) as exc_info:
@@ -1060,8 +1110,10 @@ class TestCmdSsh:
         monkeypatch.setattr("sys.platform", "win32")
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
-            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda cmd, **_kw: (
+                (captured_cmd.extend(cmd), None)[1]
+                or subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            ),
         )
 
         args = argparse.Namespace(remote_cmd=[], name=None, verbose=False)
@@ -1075,7 +1127,9 @@ class TestCmdSsh:
         """vst ssh nvidia-smi (no instance named nvidia-smi) -> runs nvidia-smi."""
         from vastly.commands import cmd_ssh
 
-        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+        )
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
@@ -1087,14 +1141,18 @@ class TestCmdSsh:
         monkeypatch.setattr("sys.platform", "win32")
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
-            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda cmd, **_kw: (
+                (captured_cmd.extend(cmd), None)[1]
+                or subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            ),
         )
 
         # name="nvidia-smi" doesn't match any instance, so it should be
         # treated as a remote command on the auto-selected instance
         args = argparse.Namespace(
-            remote_cmd=[], name="nvidia-smi", verbose=False,
+            remote_cmd=[],
+            name="nvidia-smi",
+            verbose=False,
         )
 
         cmd_ssh(args)
@@ -1106,7 +1164,9 @@ class TestCmdSsh:
         """vst ssh train nvidia-smi -> runs nvidia-smi on 'train' instance."""
         from vastly.commands import cmd_ssh
 
-        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+        )
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
@@ -1121,12 +1181,16 @@ class TestCmdSsh:
         monkeypatch.setattr("sys.platform", "win32")
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
-            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda cmd, **_kw: (
+                (captured_cmd.extend(cmd), None)[1]
+                or subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            ),
         )
 
         args = argparse.Namespace(
-            remote_cmd=["nvidia-smi"], name="train", verbose=False,
+            remote_cmd=["nvidia-smi"],
+            name="train",
+            verbose=False,
         )
 
         cmd_ssh(args)
@@ -1199,7 +1263,7 @@ class TestStartAndResync:
         from vastly.commands import _start_and_resync
 
         monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
-        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *a, **kw: None)
+        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *_a, **_kw: None)
         monkeypatch.setattr(
             "vastly.commands.sync_instances",
             lambda config: [_inst(name="gpu", id=1, status="stopped")],
@@ -1224,9 +1288,7 @@ class TestYesFlag:
         monkeypatch.setattr(
             "vastly.commands.load_config", lambda **kw: make_test_config()
         )
-        monkeypatch.setattr(
-            "vastly.commands._check_prerequisites", lambda **kw: None
-        )
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
             "vastly.commands.get_synced_instances",
             lambda config: [_inst(name="gpu", id=1)],
@@ -1242,7 +1304,11 @@ class TestYesFlag:
         )
 
         args = argparse.Namespace(
-            command="destroy", name=None, all=False, yes=True, verbose=False,
+            command="destroy",
+            name=None,
+            all=False,
+            yes=True,
+            verbose=False,
         )
         cmd_destroy(args)
 
@@ -1257,9 +1323,7 @@ class TestYesFlag:
         monkeypatch.setattr(
             "vastly.commands.load_config", lambda **kw: make_test_config()
         )
-        monkeypatch.setattr(
-            "vastly.commands._check_prerequisites", lambda **kw: None
-        )
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
             "vastly.commands.get_synced_instances",
             lambda config: [
@@ -1278,7 +1342,11 @@ class TestYesFlag:
         )
 
         args = argparse.Namespace(
-            command="stop", name=None, all=True, yes=True, verbose=False,
+            command="stop",
+            name=None,
+            all=True,
+            yes=True,
+            verbose=False,
         )
         cmd_stop(args)
 
@@ -1291,7 +1359,9 @@ class TestYesFlag:
 class TestCmdStopNonStoppableStates:
     """cmd_stop should give specific errors for named instances in non-stoppable states."""
 
-    @pytest.mark.parametrize("state", ["offline", "error", "unknown", "stopped", "exited"])
+    @pytest.mark.parametrize(
+        "state", ["offline", "error", "unknown", "stopped", "exited"]
+    )
     def test_named_instance_non_stoppable_raises(self, state, monkeypatch):
         from vastly.commands import cmd_stop
 
@@ -1317,7 +1387,9 @@ class TestCmdConnectNoSetupPath:
     def test_no_setup_in_repo_opens_project_dir(self, monkeypatch):
         from vastly.commands import cmd_connect
 
-        monkeypatch.setattr("vastly.commands._git_root", lambda: Path("/repo/my-project"))
+        monkeypatch.setattr(
+            "vastly.commands._git_root", lambda: Path("/repo/my-project")
+        )
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
@@ -1336,7 +1408,11 @@ class TestCmdConnectNoSetupPath:
         )
 
         args = argparse.Namespace(
-            name=None, no_setup=True, force_setup=False, all=False, verbose=False,
+            name=None,
+            no_setup=True,
+            force_setup=False,
+            all=False,
+            verbose=False,
         )
         cmd_connect(args)
 
@@ -1362,7 +1438,11 @@ class TestCmdConnectNoSetupPath:
         )
 
         args = argparse.Namespace(
-            name=None, no_setup=False, force_setup=False, all=False, verbose=False,
+            name=None,
+            no_setup=False,
+            force_setup=False,
+            all=False,
+            verbose=False,
         )
         cmd_connect(args)
 
@@ -1396,7 +1476,7 @@ class TestVastaiDestroyCleanup:
         # Mock the actual vastai CLI call
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda *_a, **_kw: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
         )
 
         inst = _inst(name="gpu-box", id=42, alias="train")
@@ -1422,7 +1502,7 @@ class TestVastaiDestroyCleanup:
 
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda *_a, **_kw: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
         )
 
         # Instance with no alias and no existing SSH config -- should not error
@@ -1438,11 +1518,14 @@ class TestCmdSshSmartDispatch:
 
     def _ssh_base_mocks(self, monkeypatch, instances):
         """Set up the common mocks for cmd_ssh tests."""
-        monkeypatch.setattr("vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+        monkeypatch.setattr(
+            "vastly.commands.shutil.which", lambda cmd: f"/usr/bin/{cmd}"
+        )
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr(
-            "vastly.commands.sync_instances", lambda _: instances,
+            "vastly.commands.sync_instances",
+            lambda _: instances,
         )
         monkeypatch.setattr("sys.platform", "win32")
 
@@ -1471,8 +1554,10 @@ class TestCmdSshSmartDispatch:
         captured_cmd = []
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
-            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda cmd, **_kw: (
+                (captured_cmd.extend(cmd), None)[1]
+                or subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            ),
         )
 
         args = argparse.Namespace(remote_cmd=[], name="gpu-b", verbose=False)
@@ -1496,8 +1581,10 @@ class TestCmdSshSmartDispatch:
         captured_cmd = []
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
-            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda cmd, **_kw: (
+                (captured_cmd.extend(cmd), None)[1]
+                or subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            ),
         )
 
         args = argparse.Namespace(remote_cmd=[], name="gpu-b", verbose=False)
@@ -1514,8 +1601,10 @@ class TestCmdSshSmartDispatch:
         captured_cmd = []
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda cmd, **kw: (captured_cmd.extend(cmd), None)[1]
-            or subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+            lambda cmd, **_kw: (
+                (captured_cmd.extend(cmd), None)[1]
+                or subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            ),
         )
 
         args = argparse.Namespace(remote_cmd=[], name="gpu-bx", verbose=False)
@@ -1543,10 +1632,15 @@ class TestPollForRunningApiFailures:
             call_count[0] += 1
             if call_count[0] <= 2:
                 # First 2 calls fail
-                return subprocess.CompletedProcess([], 1, stdout="", stderr="network error")
+                return subprocess.CompletedProcess(
+                    [], 1, stdout="", stderr="network error"
+                )
             # Then succeeds
             return subprocess.CompletedProcess(
-                [], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr=""
+                [],
+                0,
+                stdout='{"cur_state": "running", "actual_status": "running"}',
+                stderr="",
             )
 
         monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
@@ -1564,7 +1658,9 @@ class TestPollForRunningApiFailures:
 
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 1, stdout="", stderr="API down"),
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [], 1, stdout="", stderr="API down"
+            ),
         )
 
         with pytest.raises(VastlyError, match="Cannot reach.*API down"):
@@ -1581,7 +1677,9 @@ class TestPollForRunningApiFailures:
 
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="not json", stderr=""),
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [], 0, stdout="not json", stderr=""
+            ),
         )
 
         with pytest.raises(VastlyError, match="invalid data"):
@@ -1611,7 +1709,10 @@ class TestPollForRunningApiFailures:
                 return subprocess.CompletedProcess([], 1, stdout="", stderr="err")
             # Finally running
             return subprocess.CompletedProcess(
-                [], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr=""
+                [],
+                0,
+                stdout='{"cur_state": "running", "actual_status": "running"}',
+                stderr="",
             )
 
         monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
@@ -1643,7 +1744,7 @@ class TestDoConnect:
         setup_called = []
         monkeypatch.setattr(
             "vastly.commands.setup_instances",
-            lambda *a, **kw: (setup_called.append(True), [a[0][0].name])[1],
+            lambda *a, **_kw: (setup_called.append(True), [a[0][0].name])[1],
         )
 
         ide_calls = []
@@ -1676,7 +1777,7 @@ class TestDoConnect:
         setup_called = []
         monkeypatch.setattr(
             "vastly.commands.setup_instances",
-            lambda *a, **kw: setup_called.append(True),
+            lambda *_a, **_kw: setup_called.append(True),
         )
 
         ide_calls = []
@@ -1716,8 +1817,11 @@ class TestCmdStartUsesDoConnect:
         # Simulate poll returning running
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
-                [], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr=""
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [],
+                0,
+                stdout='{"cur_state": "running", "actual_status": "running"}',
+                stderr="",
             ),
         )
 
@@ -1749,8 +1853,11 @@ class TestCmdStartUsesDoConnect:
 
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess(
-                [], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr=""
+            lambda *_a, **_kw: subprocess.CompletedProcess(
+                [],
+                0,
+                stdout='{"cur_state": "running", "actual_status": "running"}',
+                stderr="",
             ),
         )
 
@@ -1826,7 +1933,10 @@ class TestCmdNameClear:
         from vastly.commands import cmd_name
 
         args = argparse.Namespace(
-            alias="train", clear=True, instance=None, verbose=False,
+            alias="train",
+            clear=True,
+            instance=None,
+            verbose=False,
         )
         cmd_name(args)
 
@@ -1841,7 +1951,10 @@ class TestCmdNameClear:
         from vastly.commands import cmd_name
 
         args = argparse.Namespace(
-            alias="nope", clear=True, instance=None, verbose=False,
+            alias="nope",
+            clear=True,
+            instance=None,
+            verbose=False,
         )
         with pytest.raises(VastlyError, match="No alias 'nope' found"):
             cmd_name(args)
@@ -1889,7 +2002,10 @@ class TestCmdNameSshCleanup:
         )
 
         args = argparse.Namespace(
-            alias="new-alias", clear=False, instance=None, verbose=False,
+            alias="new-alias",
+            clear=False,
+            instance=None,
+            verbose=False,
         )
         cmd_name(args)
 

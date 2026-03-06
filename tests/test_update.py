@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
-
 
 class TestUpdateCheck:
     def test_parse_version(self):
