@@ -136,14 +136,14 @@ def _print_help() -> None:
     ]
     options = [
         ("-f, --force-setup", "re-run remote setup"),
-        ("-n, --no-setup", "skip setup (just open IDE)"),
+        ("-n, --no-setup", "skip project setup (just open IDE)"),
         ("-v, --verbose", "verbose output"),
         ("-h, --help", "show help"),
         ("--version", "show version"),
     ]
     print(f"\n{cyan('usage:')} vst [name] [-f | -n]\n")
     print("Connect to a Vast.ai instance and open your IDE.")
-    print(dim("Run with no arguments to auto-select, or pass a name."))
+    print(dim("Auto-selects if only one instance, prompts if multiple."))
     print(dim("Auto-starts stopped instances if none are running.\n"))
     _print_section("commands", commands)
     print()
@@ -225,7 +225,7 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argumen
         "-n",
         "--no-setup",
         action="store_true",
-        help="skip remote setup (just open IDE)",
+        help="skip project setup (just open IDE)",
     )
     g.add_argument(
         "-f",

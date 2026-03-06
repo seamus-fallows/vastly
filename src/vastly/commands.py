@@ -505,9 +505,13 @@ def cmd_stop(args: argparse.Namespace) -> None:
     else:
         selected = select_instance(stoppable, args.name, allow_all=True)
 
-    if len(selected) > 1 and not args.yes:
-        if not _confirm(f"Stop {len(selected)} instances?"):
-            return
+    if not args.yes:
+        if len(selected) == 1:
+            if not _confirm(f"Stop {selected[0].display_name}?"):
+                return
+        else:
+            if not _confirm(f"Stop {len(selected)} instances?"):
+                return
 
     for inst in selected:
         _vastai_action("stop", inst)
