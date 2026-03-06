@@ -152,7 +152,7 @@ def _print_help() -> None:
     sys.exit(0)
 
 
-def _print_cmd_help(cmd: str, parsers: dict) -> None:
+def _print_cmd_help(cmd: str, parsers: dict[str, argparse.ArgumentParser]) -> None:
     """Print help for a subcommand and exit."""
     info = _CMD_HELP[cmd]
     print(f"\n{cyan('usage:')} {info['usage']}\n")

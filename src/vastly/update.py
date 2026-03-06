@@ -7,6 +7,7 @@ import time
 import urllib.request
 from pathlib import Path
 
+import vastly
 from vastly import __version__, dim
 
 _CACHE_DIR = Path.home() / ".vastly"
@@ -71,5 +72,4 @@ def check_for_update() -> None:
                 )
             )
     except Exception as e:
-        import vastly
         vastly.verbose(f"Update check failed: {e}")

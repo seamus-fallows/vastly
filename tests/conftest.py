@@ -28,40 +28,22 @@ def make_test_config(**overrides) -> dict:
     return base
 
 
-# ── Fixtures ─────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def make_instance():
-    """Factory for Vast.ai instance dicts with sensible defaults."""
-
-    def _make(**overrides):
-        base = {
-            "id": 12345,
-            "gpu_name": "RTX 4090",
-            "num_gpus": 1,
-            "geolocation": "San Jose, CA, US",
-            "cur_state": "running",
-            "public_ipaddr": "203.0.113.1",
-            "ports": {"22/tcp": [{"HostPort": "22222"}]},
-            "dph_total": 0.50,
-        }
-        base.update(overrides)
-        return base
-
-    return _make
-
-
-@pytest.fixture
-def make_config():
-    """Factory for vastly config dicts with sensible defaults."""
-
-    def _make(**overrides):
-        base = {**DEFAULTS}
-        base.update(overrides)
-        return base
-
-    return _make
+def make_api_instance(
+    inst_id, state="running", gpu="RTX 4090", geo="Taipei, TW", **extra
+):
+    """Create a fake API instance dict (as returned by vastai show instances --raw)."""
+    base = {
+        "id": inst_id,
+        "cur_state": state,
+        "gpu_name": gpu,
+        "num_gpus": 1,
+        "geolocation": geo,
+        "dph_total": 0.25,
+        "public_ipaddr": f"10.0.0.{inst_id}",
+        "ports": {"22/tcp": [{"HostPort": str(22000 + inst_id)}]},
+    }
+    base.update(extra)
+    return base
 
 
 @pytest.fixture

@@ -107,6 +107,8 @@ def build_instance_name(inst: dict[str, Any], seen: set[str]) -> str:
     base = f"{num_gpus}x{gpu_name}-{country}" if country else f"{num_gpus}x{gpu_name}"
 
     if base in seen:
+        # Collision: append ID to disambiguate (don't add to seen -- we
+        # track base names only so the *first* user keeps the short name).
         name = f"{base}-{inst['id']}"
     else:
         seen.add(base)
