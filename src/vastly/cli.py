@@ -174,7 +174,11 @@ def _print_cmd_help(cmd: str, parsers: dict[str, argparse.ArgumentParser]) -> No
         if action.option_strings:
             opts.append((", ".join(action.option_strings), action.help))
         else:
-            name = "|".join(action.choices) if action.choices else (action.metavar or action.dest)
+            name = (
+                "|".join(action.choices)
+                if action.choices
+                else (action.metavar or action.dest)
+            )
             pos_args.append((name, action.help))
 
     if pos_args:
@@ -195,7 +199,9 @@ def _print_cmd_help(cmd: str, parsers: dict[str, argparse.ArgumentParser]) -> No
 # ── Argument parser ─────────────────────────────────────────────────
 
 
-def _build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentParser]]:
+def _build_parser() -> tuple[
+    argparse.ArgumentParser, dict[str, argparse.ArgumentParser]
+]:
     """Build and return (parser, {cmd_name: subparser})."""
     hint = "auto-selects if only one, prompts if multiple"
 
@@ -287,7 +293,9 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argumen
     p = subparsers.add_parser("ssh", help="SSH into a running instance")
     p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
     p.add_argument(
-        "remote_cmd", nargs=argparse.REMAINDER, help="command to run (optional)",
+        "remote_cmd",
+        nargs=argparse.REMAINDER,
+        help="command to run (optional)",
         metavar="command",
     )
     parsers["ssh"] = p
@@ -304,7 +312,11 @@ def main(argv: list[str] | None = None) -> None:
 
     if ensure_config():
         print(dim("  \u250c Created ") + str(CONFIG_PATH))
-        print(dim("  \u2502 Run 'vst' from a git repo to connect to your Vast.ai instance."))
+        print(
+            dim(
+                "  \u2502 Run 'vst' from a git repo to connect to your Vast.ai instance."
+            )
+        )
         print(dim("  \u2502 Run 'vst -h' for all commands."))
         print(dim("  \u2514 Edit ~/.vastly/config.json to customize.\n"))
 
@@ -352,9 +364,15 @@ def main(argv: list[str] | None = None) -> None:
         vastly.VERBOSE = True
 
     dispatch = {
-        "connect": cmd_connect, "list": cmd_list, "start": cmd_start,
-        "stop": cmd_stop, "destroy": cmd_destroy, "name": cmd_name,
-        "cp": cmd_cp, "config": cmd_config, "ssh": cmd_ssh,
+        "connect": cmd_connect,
+        "list": cmd_list,
+        "start": cmd_start,
+        "stop": cmd_stop,
+        "destroy": cmd_destroy,
+        "name": cmd_name,
+        "cp": cmd_cp,
+        "config": cmd_config,
+        "ssh": cmd_ssh,
     }
 
     try:

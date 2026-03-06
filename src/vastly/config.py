@@ -32,6 +32,7 @@ class Config(TypedDict):
     installCommand: str | None
     copyFiles: list[str]
 
+
 CONFIG_DIR = Path.home() / ".vastly"
 CONFIG_PATH = CONFIG_DIR / "config.json"
 
@@ -57,14 +58,16 @@ def _ensure_list(config: dict, key: str) -> None:
         config[key] = [config[key]]
 
 
-_PROJECT_KEYS = frozenset({
-    "postInstall",
-    "installCommand",
-    "workspace",
-    "portForwards",
-    "copyFiles",
-    "gitRemote",
-})
+_PROJECT_KEYS = frozenset(
+    {
+        "postInstall",
+        "installCommand",
+        "workspace",
+        "portForwards",
+        "copyFiles",
+        "gitRemote",
+    }
+)
 
 
 def _ide_from_env() -> str | None:
@@ -136,7 +139,9 @@ def _validate_config(config: Config) -> None:
 
     # sshKeyPath: None or non-empty string
     ssh_key_path = config["sshKeyPath"]
-    if ssh_key_path is not None and (not isinstance(ssh_key_path, str) or not ssh_key_path):
+    if ssh_key_path is not None and (
+        not isinstance(ssh_key_path, str) or not ssh_key_path
+    ):
         raise ConfigError(
             f"Invalid config: 'sshKeyPath' must be None or a non-empty string, "
             f"got {type(ssh_key_path).__name__}"
@@ -152,7 +157,9 @@ def _validate_config(config: Config) -> None:
 
     # installCommand: None or non-empty string
     install_cmd = config["installCommand"]
-    if install_cmd is not None and (not isinstance(install_cmd, str) or not install_cmd):
+    if install_cmd is not None and (
+        not isinstance(install_cmd, str) or not install_cmd
+    ):
         raise ConfigError(
             f"Invalid config: 'installCommand' must be None or a non-empty string, "
             f"got {type(install_cmd).__name__}"
@@ -207,7 +214,9 @@ def _warn_unknown_keys(raw: dict[str, Any], source: str) -> None:
     unknown = set(raw) - _KNOWN_KEYS
     if unknown:
         keys = ", ".join(sorted(unknown))
-        print(yellow(f"Warning: unknown config keys in {source}: {keys}"), file=sys.stderr)
+        print(
+            yellow(f"Warning: unknown config keys in {source}: {keys}"), file=sys.stderr
+        )
 
 
 def ensure_config(path: Path | None = None) -> bool:

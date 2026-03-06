@@ -39,20 +39,23 @@ class Instance:
         """Return alias (auto-name) if aliased, otherwise just name."""
         return f"{self.alias} ({self.name})" if self.alias else self.name
 
+
 _ALIASES_FILE = Path.home() / ".vastly" / "aliases.json"
 
 # Reserved names that cannot be used as aliases
-_RESERVED_NAMES = frozenset({
-    "connect",
-    "stop",
-    "destroy",
-    "cp",
-    "name",
-    "list",
-    "start",
-    "config",
-    "ssh",
-})
+_RESERVED_NAMES = frozenset(
+    {
+        "connect",
+        "stop",
+        "destroy",
+        "cp",
+        "name",
+        "list",
+        "start",
+        "config",
+        "ssh",
+    }
+)
 
 # Instance lifecycle state classifications
 STOPPED_STATES = {"stopped", "exited"}
@@ -85,10 +88,14 @@ def fetch_instances() -> list[dict[str, Any]]:
     try:
         data = json.loads(result.stdout)
     except (json.JSONDecodeError, TypeError) as e:
-        raise APIError("vastai returned invalid data. Try running 'vastai show instances --raw' to debug.") from e
+        raise APIError(
+            "vastai returned invalid data. Try running 'vastai show instances --raw' to debug."
+        ) from e
 
     if not isinstance(data, list):
-        raise APIError("vastai returned invalid data. Try running 'vastai show instances --raw' to debug.")
+        raise APIError(
+            "vastai returned invalid data. Try running 'vastai show instances --raw' to debug."
+        )
     return data
 
 
@@ -137,7 +144,9 @@ def save_aliases(aliases: dict[str, str]) -> None:
     _ALIASES_FILE.write_text(json.dumps(aliases, indent=2) + "\n", encoding="utf-8")
 
 
-def validate_alias(alias: str, instances: list[Instance], aliases: dict[str, str]) -> None:
+def validate_alias(
+    alias: str, instances: list[Instance], aliases: dict[str, str]
+) -> None:
     """Validate an alias name. Raises VastlyError on invalid input."""
     if not alias:
         raise VastlyError("Alias cannot be empty.")
@@ -206,15 +215,17 @@ def sync_instances(config: Config) -> list[Instance]:
             # cur_state says "running" but no ports -- use actual_status
             actual = inst.get("actual_status", "loading")
             status = actual if actual != "running" else "loading"
-            results.append(Instance(
-                name=name,
-                id=inst["id"],
-                dph_total=inst.get("dph_total", 0),
-                gpu_name=inst.get("gpu_name", ""),
-                num_gpus=inst.get("num_gpus", 0),
-                status=status,
-                alias=None,
-            ))
+            results.append(
+                Instance(
+                    name=name,
+                    id=inst["id"],
+                    dph_total=inst.get("dph_total", 0),
+                    gpu_name=inst.get("gpu_name", ""),
+                    num_gpus=inst.get("num_gpus", 0),
+                    status=status,
+                    alias=None,
+                )
+            )
             continue
 
         local_forwards = []
@@ -240,29 +251,33 @@ def sync_instances(config: Config) -> list[Instance]:
             "local_forwards": local_forwards,
         }
 
-        results.append(Instance(
-            name=name,
-            id=inst["id"],
-            dph_total=inst.get("dph_total", 0),
-            gpu_name=inst.get("gpu_name", ""),
-            num_gpus=inst.get("num_gpus", 0),
-            status="running",
-            alias=None,
-        ))
+        results.append(
+            Instance(
+                name=name,
+                id=inst["id"],
+                dph_total=inst.get("dph_total", 0),
+                gpu_name=inst.get("gpu_name", ""),
+                num_gpus=inst.get("num_gpus", 0),
+                status="running",
+                alias=None,
+            )
+        )
 
     # Process non-running instances (no SSH config, no port extraction)
     for inst in non_running:
         name = build_instance_name(inst, seen)
 
-        results.append(Instance(
-            name=name,
-            id=inst["id"],
-            dph_total=inst.get("dph_total", 0),
-            gpu_name=inst.get("gpu_name", ""),
-            num_gpus=inst.get("num_gpus", 0),
-            status=inst.get("cur_state", "unknown"),
-            alias=None,
-        ))
+        results.append(
+            Instance(
+                name=name,
+                id=inst["id"],
+                dph_total=inst.get("dph_total", 0),
+                gpu_name=inst.get("gpu_name", ""),
+                num_gpus=inst.get("num_gpus", 0),
+                status=inst.get("cur_state", "unknown"),
+                alias=None,
+            )
+        )
 
     # Prune aliases for instances that no longer exist in the API at all
     aliases = load_aliases()
@@ -291,8 +306,14 @@ def sync_instances(config: Config) -> list[Instance]:
                 )
 
     # Prune stale SSH configs (ones we didn't just write)
-    written_configs = {r.name for r in results if r.status == "running" and r.id in ssh_params}
-    written_configs |= {r.alias for r in results if r.alias and r.status == "running" and r.id in ssh_params}
+    written_configs = {
+        r.name for r in results if r.status == "running" and r.id in ssh_params
+    }
+    written_configs |= {
+        r.alias
+        for r in results
+        if r.alias and r.status == "running" and r.id in ssh_params
+    }
     prune_ssh_configs(written_configs)
 
     return results

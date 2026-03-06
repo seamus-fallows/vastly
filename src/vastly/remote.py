@@ -49,7 +49,11 @@ def setup_instances(
 
     setup_script = Path(str(resources.files("vastly.data").joinpath("setup-remote.sh")))
     if not setup_script.exists():
-        print(red("Setup script not found. If installed from a zip, try: pip install vastly"))
+        print(
+            red(
+                "Setup script not found. If installed from a zip, try: pip install vastly"
+            )
+        )
         return []
 
     install_cmd = config["installCommand"] or "auto"
@@ -92,7 +96,11 @@ def setup_instances(
                 time.sleep(5)
 
         if not reachable:
-            print(red(" unreachable. Check that the instance is running and your SSH key is loaded (ssh-add -l)."))
+            print(
+                red(
+                    " unreachable. Check that the instance is running and your SSH key is loaded (ssh-add -l)."
+                )
+            )
             continue
 
         # Parse probe output: marker JSON (before separator) and setup listing (after)

@@ -54,7 +54,9 @@ def _git_root() -> Path | None:
     return Path(top) if top else None
 
 
-def _check_prerequisites(*, need_ide: bool = False, ide: str = "", need_git: bool = True) -> str:
+def _check_prerequisites(
+    *, need_ide: bool = False, ide: str = "", need_git: bool = True
+) -> str:
     """Verify required tools are available. Returns the resolved IDE name.
 
     When *need_ide* is True and the configured IDE isn't found, falls back
@@ -200,9 +202,7 @@ def _start_and_resync(
             if _vastai_start(inst):
                 queued_ids.add(inst.id)
     for inst in to_start:
-        _poll_for_running(
-            str(inst.id), inst.display_name, queued=inst.id in queued_ids
-        )
+        _poll_for_running(str(inst.id), inst.display_name, queued=inst.id in queued_ids)
 
     all_instances = sync_instances(config)
     running = [i for i in all_instances if i.status == "running"]
@@ -273,11 +273,7 @@ def _poll_for_running(
 
         if cur_state != last_status:
             last_status = cur_state
-            hint = (
-                " (Ctrl+C to cancel -- this can take a while)"
-                if queued
-                else ""
-            )
+            hint = " (Ctrl+C to cancel -- this can take a while)" if queued else ""
             print(dim(f"  {label}: waiting...{hint}"))
 
     raise VastlyError(
@@ -286,13 +282,17 @@ def _poll_for_running(
     )
 
 
-def _pick_startable(startable: list[Instance], *, select_all: bool = False) -> list[Instance]:
+def _pick_startable(
+    startable: list[Instance], *, select_all: bool = False
+) -> list[Instance]:
     """Select instances to start when none are running."""
     if select_all:
         print(yellow(f"  No running instances. Starting all {len(startable)}..."))
         return startable
     if len(startable) == 1:
-        print(yellow(f"  No running instances. Starting {startable[0].display_name}..."))
+        print(
+            yellow(f"  No running instances. Starting {startable[0].display_name}...")
+        )
         return startable
     print(yellow("  No running instances. Select one to start:"))
     show_table(startable)
@@ -386,7 +386,11 @@ def _do_connect(
     )
     display_names = {inst.name: inst.display_name for inst in selected}
     for inst_name in success_names:
-        print(green(f"  Opening {remote_path} on {display_names.get(inst_name, inst_name)}"))
+        print(
+            green(
+                f"  Opening {remote_path} on {display_names.get(inst_name, inst_name)}"
+            )
+        )
         open_ide(config["ide"], inst_name, remote_path)
 
     failed = [inst for inst in selected if inst.name not in success_names]
@@ -401,7 +405,8 @@ def _do_connect(
             show_table(startable)
             try:
                 to_start = select_instance(
-                    startable, prompt="Start a different instance?",
+                    startable,
+                    prompt="Start a different instance?",
                     allow_all=True,
                 )
             except VastlyError:
@@ -464,7 +469,9 @@ def cmd_name(args: argparse.Namespace) -> None:
 
     validate_alias(args.alias, instances, aliases)
 
-    inst = select_instance(instances, args.instance, prompt="Select instance to name:")[0]
+    inst = select_instance(instances, args.instance, prompt="Select instance to name:")[
+        0
+    ]
     inst_id = str(inst.id)
 
     # Remove any existing alias for this instance (and its SSH config)
@@ -685,7 +692,9 @@ def cmd_start(args: argparse.Namespace) -> None:
         elif inst.status in TRANSITIONAL_STATES:
             print(dim(f"  {inst.display_name} is already starting, waiting..."))
         else:
-            raise VastlyError(f"Cannot start {inst.display_name} -- it is inactive and not startable.")
+            raise VastlyError(
+                f"Cannot start {inst.display_name} -- it is inactive and not startable."
+            )
 
         if not args.no_connect:
             _poll_for_running(str(inst.id), inst.display_name, queued=queued)
@@ -765,7 +774,10 @@ def cmd_config(args: argparse.Namespace) -> None:
     # Tips
     print(f"\n{cyan('tips:')}")
     tips = [
-        ("Edit ~/.vastly/config.json to customize", "'vastly' and 'vst' are the same command"),
+        (
+            "Edit ~/.vastly/config.json to customize",
+            "'vastly' and 'vst' are the same command",
+        ),
         ("Add .vastly.json to any repo", "vst -v for debug output"),
         ("vst -f to re-run setup", "https://github.com/seamus-fallows/vastly"),
     ]
@@ -821,7 +833,9 @@ def cmd_ssh(args: argparse.Namespace) -> None:
                 all_instances, running = _start_and_resync([found_all], config)
                 match = find_by_name(running, args.name)
                 if not match:
-                    raise VastlyError("Instance started but not reachable -- it may still be initializing. Check the Vast.ai dashboard.")
+                    raise VastlyError(
+                        "Instance started but not reachable -- it may still be initializing. Check the Vast.ai dashboard."
+                    )
                 selected = [match]
             elif found_all:
                 # Exists but in a non-startable state

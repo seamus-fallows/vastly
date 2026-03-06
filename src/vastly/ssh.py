@@ -173,14 +173,20 @@ def run_ssh(
         return subprocess.run(cmd, capture_output=True, text=True, timeout=deadline)
     except subprocess.TimeoutExpired as e:
         return subprocess.CompletedProcess(
-            cmd, returncode=1,
+            cmd,
+            returncode=1,
             stdout=e.stdout or "",
             stderr=e.stderr or "timeout",
         )
 
 
 def run_scp(
-    src: str, dest: str, *, setup: bool = False, recursive: bool = False, stream: bool = False
+    src: str,
+    dest: str,
+    *,
+    setup: bool = False,
+    recursive: bool = False,
+    stream: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """SCP a file from *src* to *dest*.
 
@@ -210,7 +216,8 @@ def run_scp(
         )
     except subprocess.TimeoutExpired as e:
         return subprocess.CompletedProcess(
-            ["scp", src, dest], returncode=1,
+            ["scp", src, dest],
+            returncode=1,
             stdout=e.stdout or "",
             stderr=e.stderr or "timeout",
         )

@@ -4,17 +4,13 @@ Connect to Vast.ai GPU instances from your terminal: sync SSH configs, set up yo
 
 ## Install
 
-Requires Python 3.9+, Git, and [VS Code](https://code.visualstudio.com) or [Cursor](https://cursor.com) with the Remote-SSH extension.
-
-You also need the [Vast.ai CLI](https://vast.ai/docs/cli/getting-started) installed and configured with your API key.
-
-For private repos using SSH remotes, make sure your SSH agent is running and your key is loaded (`ssh-add -l` to check, `ssh-add` to load).
+Requires the [Vast.ai CLI](https://vast.ai/docs/cli/getting-started) (`pip install vastai && vastai set api-key YOUR_KEY`) and [VS Code](https://code.visualstudio.com) or [Cursor](https://cursor.com) with the Remote-SSH extension.
 
 ```sh
 pip install vastly
 ```
 
-This gives you two equivalent commands: `vastly` and `vst` (shorthand). All examples below use `vst`.
+This gives you two equivalent commands: `vastly` and `vst` (shorthand).
 
 ## Quick Start
 
@@ -23,19 +19,21 @@ cd your-project      # any local git repo
 vst                  # syncs SSH, sets up remote, opens IDE
 ```
 
-On first run, vastly syncs SSH configs from the API, clones your repo, auto-detects and installs dependencies, configures git identity, and opens your IDE. Subsequent runs skip setup and go straight to the IDE.
-
 ## Why Vastly
 
-Without vastly, connecting to a Vast.ai instance means finding its IP and SSH port from the dashboard, writing an SSH config entry, cloning your project, installing deps, and opening your IDE to the right host.
+Without vastly, you repeat this for every new instance:
 
 ```sh
 # without vastly
-vastai show instances                      # find instance ID, IP, port
-vim ~/.ssh/config                          # add Host block with IP, port, user, key
-code --remote ssh-remote+root@203.0.113.5  # hope you got the host right
-cd /workspace && git clone ...             # manually clone your project
-pip install -r requirements.txt            # manually install deps
+# 1. Copy SSH command from Vast.ai dashboard
+# 2. VSCode → Remote-SSH: Connect to Host → paste command
+# 3. On the remote instance:
+cd /workspace && git clone ...             # clone your project
+pip install -r requirements.txt            # install deps
+git config user.name ...                   # configure git identity
+# set up git auth
+# copy over .env, config files, etc. that aren't in git
+# fix "Permission denied (publickey)" because you forgot -A
 ```
 
 ```sh
@@ -43,21 +41,21 @@ pip install -r requirements.txt            # manually install deps
 vst
 ```
 
-Instead of working with numeric IDs, vastly names instances by GPU and region -- `1xRTX4090-TW`, `2xA100-US`. You can also assign custom aliases with `vst name`.
+`vst` does all of this for you -- syncs SSH configs with agent forwarding, clones your repo, installs deps, activates your Python environment, copies configured files not in git, and opens your IDE. On repeat runs, setup is skipped.
 
-Key features:
-
+- **Named instances** -- `1xRTX4090-TW` instead of IPs (duplicates get the instance ID appended); pick from a list when you have multiple; assign custom aliases with `vst name`
 - **Auto-start** -- if no running instances, `vst` starts a stopped one and connects
-- **Dependency auto-detection** -- detects uv, pip, or setup.py and installs accordingly
+- **Environment auto-detection** -- activates conda/venv on Vast.ai images, auto-detects uv, pip, or setup.py for dependency install
+- **SSH agent forwarding** -- authenticate with git hosts without copying keys to the instance
 - **File transfer** -- `vst cp up .env` / `vst cp down results/` without remembering IPs
-- **SSH agent forwarding** -- private repo access works automatically with SSH remotes
-- **Per-project config** -- drop a `.vastly.json` in your repo root for project-specific settings
+- **Per-project config** -- `.vastly.json` in your repo root for project-specific settings
 
 ## Commands
 
 ```sh
 vst                          # connect to your instance and open IDE
 vst [name]                   # connect by name or alias
+vst --all                    # connect to all running instances
 vst -f                       # re-run remote setup even if already done
 vst -n                       # open IDE without cloning or installing
 vst list                     # list all instances (running, stopped, etc.)
@@ -81,7 +79,7 @@ On first run, `vastly` creates `~/.vastly/config.json` with defaults:
 
 ```jsonc
 {
-  // "code" or "cursor"
+  // "code" or "cursor" (auto-detected on first run; overridden when run inside an IDE terminal)
   "ide": "code",
 
   // Path to SSH private key. null = use your SSH config or ssh-agent
@@ -110,7 +108,7 @@ On first run, `vastly` creates `~/.vastly/config.json` with defaults:
   "postInstall": [],
 
   // Override auto-detected install method
-  // null = auto-detect (uv.lock -> pyproject.toml -> requirements*.txt -> setup.py)
+  // null = auto-detect (uv.lock/pyproject[tool.uv] -> pyproject[project] -> requirements*.txt -> setup.py)
   // e.g. "uv sync", "pip install -e '.[dev]'", "conda env update -f environment.yml"
   "installCommand": null,
 
@@ -144,41 +142,12 @@ User-specific keys (`ide`, `sshKeyPath`, `sshUser`, `disableAutoTmux`) are alway
 }
 ```
 
-## How It Works
+## Authentication
 
-### 1. Sync
+To clone private repos or push to any repo, you need to authenticate with your git host:
 
-Calls the Vast.ai API and writes an SSH config for each running instance to `~/.ssh/vast.d/`. On first run, adds `Include vast.d/*` to `~/.ssh/config`.
-
-Instances are named by GPU and region (e.g. `1xRTX4090-TW`, `2xA100-US`). Duplicates get the instance ID appended (`1xRTX4090-TW-12345`).
-
-### 2. Select
-
-With one running instance, it's selected automatically. With multiple, you're prompted to pick (or pass a name directly: `vst 1xRTX4090-TW`).
-
-### 3. Setup (first run only)
-
-For each selected instance, `vastly` checks for a marker file at `~/.vastly/setup/<repo>.json` on the instance. If the marker exists, it skips straight to opening the IDE.
-
-On first run (no marker), `vastly` reads the remote URL from your local git repo, copies a setup script to the instance, and runs it. The setup script ([setup-remote.sh](src/vastly/data/setup-remote.sh)):
-
-- Disables auto-tmux (if configured)
-- Configures git identity from your local `git config`
-- Adds the git host to SSH known hosts
-- Clones your repo into the workspace
-- Installs Python dependencies (auto-detected or configured)
-- Runs any configured post-install commands
-- Configures VS Code's Python interpreter and terminal environment -- sets the correct Python path for linting/autocomplete, activates your conda/venv in new terminals, and opens terminals in your project directory
-- Writes a setup marker so setup is skipped next time
-
-**Authentication** -- to clone private repos, the instance needs to authenticate with your git host (GitHub, GitLab, etc.):
-
-- **SSH remotes** (`git@github.com:...`): Vastly enables SSH agent forwarding automatically. Your local SSH key is forwarded to the instance for the duration of the connection -- it is never copied. Make sure your key is loaded in your SSH agent.
-- **HTTPS remotes** (`https://github.com/...`): Public repos clone without authentication. Private repos will fail because HTTPS credentials cannot be forwarded. Pushing also won't work from the instance. Switch to an SSH remote: `git remote set-url origin git@github.com:user/repo.git`.
-
-### 4. Open
-
-Launches your IDE via Remote-SSH at the project directory.
+- **SSH remotes** (`git@github.com:...`): Vastly enables SSH agent forwarding automatically. Your local SSH key is used for the duration of the connection -- never copied to the instance. Make sure your key is loaded in your SSH agent (`ssh-add -l` to check).
+- **HTTPS remotes** (`https://github.com/...`): Public repos clone without authentication, but pushing requires a personal access token. You can configure one on the instance, or switch to an SSH remote: `git remote set-url origin git@github.com:user/repo.git`.
 
 ## Troubleshooting
 
@@ -188,4 +157,4 @@ Launches your IDE via Remote-SSH at the project directory.
 
 **"Not in a git repo"** -- `vastly` reads the remote URL from your local repo. Run from inside a git repo, or use `vst --no-setup`.
 
-**"Cannot access repo"** -- For SSH remotes, check that your SSH agent is running and your key is loaded (`ssh-add -l`). For HTTPS remotes with private repos, switch to an SSH remote (see Authentication above).
+**"Cannot access repo"** -- For SSH remotes, check that your SSH agent is running and your key is loaded (`ssh-add -l`). For HTTPS remotes, you may need a personal access token or to switch to SSH (see Authentication above).
