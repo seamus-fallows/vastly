@@ -634,16 +634,20 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     instances = get_synced_instances(config)
 
-    # Give a specific error if the named instance is already running
+    # Give a specific error if the named instance is already running or not startable
     if args.name:
         match = find_by_name(instances, args.name)
         if match and match.status == "running":
             raise VastlyError(
                 f"'{args.name}' is already running. Run 'vst {args.name}' to connect."
             )
+        if match and match.status not in STARTABLE_STATES:
+            raise VastlyError(
+                f"Cannot start {match.display_name} -- it is inactive and not startable."
+            )
 
-    # Filter to non-running instances for selection
-    non_running = [i for i in instances if i.status != "running"]
+    # Filter to startable instances (stopped/exited/transitional)
+    non_running = [i for i in instances if i.status in STARTABLE_STATES]
     if not non_running:
         raise VastlyError("All instances are already running. Run 'vst' to connect.")
 

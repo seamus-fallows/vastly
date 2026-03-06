@@ -259,6 +259,7 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
         config["ide"] = env_ide
 
     _ensure_list(config, "postInstall")
+    _ensure_list(config, "copyFiles")
 
     # Overlay per-project config (only project-specific keys)
     # TODO: consider merging global + project postInstall instead of replacing,
@@ -284,6 +285,7 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
                 config[k] = v
 
             _ensure_list(config, "postInstall")
+            _ensure_list(config, "copyFiles")
 
             vastly.verbose(f"Project config overlaid from {project_cfg}")
 
