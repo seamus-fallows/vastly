@@ -31,7 +31,7 @@ import pytest
 
 from vastly.config import DEFAULTS
 from vastly.instance import fetch_instances, sync_instances
-from vastly.ssh import cached_config_names, run_ssh
+from vastly.ssh import SSH_CONFIG_DIR, run_ssh
 
 
 def _vastai_configured() -> bool:
@@ -69,9 +69,9 @@ def synced_instances():
 
 @pytest.fixture(scope="module")
 def live_instance(synced_instances):
-    """Return the first running non-cached instance, or skip."""
+    """Return the first running instance, or skip."""
     for inst in synced_instances:
-        if not inst.cached and inst.status == "running":
+        if inst.status == "running":
             return inst
     pytest.skip("No live running instances available")
 
@@ -127,8 +127,8 @@ class TestSSHConnectivity:
         assert result.stdout.strip() == "ok"
 
     def test_ssh_config_file_exists(self, live_instance):
-        names = cached_config_names()
-        assert live_instance.name in names
+        config_file = SSH_CONFIG_DIR / live_instance.name
+        assert config_file.exists()
 
     def test_ssh_environment_has_basic_tools(self, live_instance):
         result = run_ssh(live_instance.name, "which bash && which cat")

@@ -54,7 +54,7 @@ def _git_root() -> Path | None:
     return Path(top) if top else None
 
 
-def _check_prerequisites(*, need_ide: bool = False, ide: str = "") -> str:
+def _check_prerequisites(*, need_ide: bool = False, ide: str = "", need_git: bool = True) -> str:
     """Verify required tools are available. Returns the resolved IDE name.
 
     When *need_ide* is True and the configured IDE isn't found, falls back
@@ -64,7 +64,7 @@ def _check_prerequisites(*, need_ide: bool = False, ide: str = "") -> str:
 
     if not shutil.which("vastai"):
         missing.append("Missing: vastai CLI. Install with: pip install vastai")
-    if not shutil.which("git"):
+    if need_git and not shutil.which("git"):
         missing.append("Missing: git.")
     if not shutil.which("ssh"):
         missing.append("Missing: ssh.")
@@ -100,6 +100,7 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     repo_url = result.stdout.strip()
     if not repo_url:
         return None
+    # Extract repo name from HTTPS (user/repo.git) and SSH (host:user/repo.git) URLs
     repo_name = repo_url.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
     return repo_url, repo_name
 
@@ -109,8 +110,12 @@ def _confirm(prompt: str) -> bool:
     try:
         answer = input(f"{prompt} [y/N] ").strip().lower()
     except (EOFError, KeyboardInterrupt):
+        print()
         return False
-    return answer == "y"
+    if answer != "y":
+        print(dim("  Cancelled."))
+        return False
+    return True
 
 
 # ── Vastai wrappers ─────────────────────────────────────────────────
@@ -281,6 +286,19 @@ def _poll_for_running(
     )
 
 
+def _pick_startable(startable: list[Instance], *, select_all: bool = False) -> list[Instance]:
+    """Select instances to start when none are running."""
+    if select_all:
+        print(yellow(f"  No running instances. Starting all {len(startable)}..."))
+        return startable
+    if len(startable) == 1:
+        print(yellow(f"  No running instances. Starting {startable[0].display_name}..."))
+        return startable
+    print(yellow("  No running instances. Select one to start:"))
+    show_table(startable)
+    return [select_instance(startable)[0]]
+
+
 # ── Subcommand handlers ────────────────────────────────────────────
 
 
@@ -301,11 +319,7 @@ def _do_connect(
     running = [i for i in all_instances if i.status == "running"]
 
     if not running:
-        # Include both stopped and transitional (loading, creating, etc.)
-        startable = [
-            i for i in all_instances
-            if i.status in STARTABLE_STATES
-        ]
+        startable = [i for i in all_instances if i.status in STARTABLE_STATES]
 
         if name:
             match = find_by_name(startable, name)
@@ -313,26 +327,12 @@ def _do_connect(
                 to_start = [match]
             else:
                 if find_by_name(all_instances, name):
-                    raise VastlyError(
-                        f"'{name}' is inactive and cannot be started."
-                    )
+                    raise VastlyError(f"'{name}' is inactive and cannot be started.")
                 raise VastlyError(f"No instance named '{name}'.")
         elif not startable:
             raise VastlyError("No Vast instances found.")
-        elif select_all:
-            print(yellow(f"  No running instances. Starting all {len(startable)}..."))
-            to_start = startable
-        elif len(startable) == 1:
-            to_start = [startable[0]]
-            print(
-                yellow(
-                    f"  No running instances. Starting {to_start[0].display_name}..."
-                )
-            )
         else:
-            print(yellow("  No running instances. Select one to start:"))
-            show_table(startable)
-            to_start = [select_instance(startable)[0]]
+            to_start = _pick_startable(startable, select_all=select_all)
 
         all_instances, running = _start_and_resync(to_start, config)
 
@@ -389,6 +389,10 @@ def _do_connect(
         print(green(f"  Opening {remote_path} on {display_names.get(inst_name, inst_name)}"))
         open_ide(config["ide"], inst_name, remote_path)
 
+    failed = [inst for inst in selected if inst.name not in success_names]
+    for inst in failed:
+        print(yellow(f"  Skipping {inst.display_name} (setup failed)"))
+
     # Only check for updates after successful connect
     from vastly.update import check_for_update
 
@@ -438,12 +442,12 @@ def cmd_name(args: argparse.Namespace) -> None:
 
     _check_prerequisites()
 
-    instances = get_running_instances(config)
+    instances = get_synced_instances(config)
     aliases = load_aliases()
 
     validate_alias(args.alias, instances, aliases)
 
-    inst = select_instance(instances, args.instance)[0]
+    inst = select_instance(instances, args.instance, prompt="Select instance to name:")[0]
     inst_id = str(inst.id)
 
     # Remove any existing alias for this instance (and its SSH config)
@@ -542,14 +546,16 @@ def _copy_one(
         is_dir = is_dir or local_path.is_dir()
 
     if direction == "down":
+        if not is_dir:
+            probe = run_ssh(inst.name, f"test -d {shlex.quote(remote_path)}")
+            is_dir = probe.returncode == 0
         local_path.parent.mkdir(parents=True, exist_ok=True)
         src = f"{inst.name}:{remote_path}"
         if is_dir:
             src = f"{inst.name}:{remote_path}/"
-        result = run_scp(src, str(local_path), recursive=is_dir)
+        result = run_scp(src, str(local_path), recursive=is_dir, stream=True)
         if result.returncode != 0:
-            msg = result.stderr.strip() or "unknown error"
-            print(yellow(f"  Download failed for {rel_path}: {msg}"))
+            print(yellow(f"  Download failed for {rel_path}"))
             return False
         print(green(f"  Downloaded {rel_path}"))
         return True
@@ -563,10 +569,9 @@ def _copy_one(
         remote_parent = f"{remote_base}/{parent_rel}"
         run_ssh(inst.name, f"mkdir -p {shlex.quote(remote_parent)}")
     dest = f"{inst.name}:{remote_path}"
-    result = run_scp(str(local_path), dest, recursive=is_dir)
+    result = run_scp(str(local_path), dest, recursive=is_dir, stream=True)
     if result.returncode != 0:
-        msg = result.stderr.strip() or "unknown error"
-        print(yellow(f"  Upload failed for {rel_path}: {msg}"))
+        print(yellow(f"  Upload failed for {rel_path}"))
         return False
     print(green(f"  Uploaded {rel_path}"))
     return True
@@ -742,23 +747,16 @@ def cmd_config(args: argparse.Namespace) -> None:
 def cmd_ssh(args: argparse.Namespace) -> None:
     """SSH into a running instance, optionally running a command."""
 
-    if not shutil.which("ssh"):
-        raise VastlyError("Missing: ssh.")
-
     git_root = _git_root()
     config = load_config(project_dir=git_root)
 
-    if not shutil.which("vastai"):
-        raise VastlyError("Missing: vastai CLI. Install with: pip install vastai")
+    _check_prerequisites(need_git=False)
 
     all_instances = sync_instances(config)
     running = [i for i in all_instances if i.status == "running"]
 
     if not running:
-        startable = [
-            i for i in all_instances
-            if i.status in STARTABLE_STATES
-        ]
+        startable = [i for i in all_instances if i.status in STARTABLE_STATES]
         if not startable:
             raise VastlyError("No Vast instances found.")
 
@@ -769,17 +767,7 @@ def cmd_ssh(args: argparse.Namespace) -> None:
             to_start = None
 
         if to_start is None:
-            if len(startable) == 1:
-                to_start = [startable[0]]
-                print(
-                    yellow(
-                        f"  No running instances. Starting {to_start[0].display_name}..."
-                    )
-                )
-            else:
-                print(yellow("  No running instances. Select one to start:"))
-                show_table(startable)
-                to_start = [select_instance(startable)[0]]
+            to_start = _pick_startable(startable)
 
         all_instances, running = _start_and_resync(to_start, config)
 
@@ -817,7 +805,7 @@ def cmd_ssh(args: argparse.Namespace) -> None:
                     all_names.append(i.name)
                     if i.alias:
                         all_names.append(i.alias)
-                close = get_close_matches(args.name, all_names, n=1, cutoff=0.5)
+                close = get_close_matches(args.name, all_names, n=1, cutoff=0.75)
                 if close:
                     raise VastlyError(
                         f"No instance named '{args.name}'. Did you mean '{close[0]}'?"

@@ -180,9 +180,15 @@ def run_ssh(
 
 
 def run_scp(
-    src: str, dest: str, *, setup: bool = False, recursive: bool = False
+    src: str, dest: str, *, setup: bool = False, recursive: bool = False, stream: bool = False
 ) -> subprocess.CompletedProcess[str]:
-    """SCP a file from *src* to *dest*."""
+    """SCP a file from *src* to *dest*.
+
+    Args:
+        setup: Use longer timeout options (for setup scripts).
+        recursive: Copy directories recursively.
+        stream: Show SCP progress instead of capturing output.
+    """
     opts = list(SSH_SETUP_OPTS if setup else SSH_OPTS)
     if vastly.VERBOSE:
         opts.extend(["-o", "LogLevel=DEBUG"])
@@ -192,6 +198,10 @@ def run_scp(
     vastly.verbose(f"scp {src} -> {dest}")
 
     try:
+        if stream:
+            return subprocess.run(
+                ["scp", *flags, *opts, src, dest], text=True, timeout=deadline
+            )
         return subprocess.run(
             ["scp", *flags, *opts, src, dest],
             capture_output=True,

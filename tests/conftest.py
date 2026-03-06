@@ -11,7 +11,7 @@ def make_test_instance(name="test", inst_id=1, **kwargs):
     """Create an Instance with sensible defaults for testing."""
     defaults = dict(
         name=name, id=inst_id, dph_total=0.50, gpu_name="RTX 4090",
-        num_gpus=1, start_date=None, status="running", alias=None,
+        num_gpus=1, status="running", alias=None,
     )
     defaults.update(kwargs)
     return Instance(**defaults)
@@ -31,7 +31,6 @@ def make_instance():
             "public_ipaddr": "203.0.113.1",
             "ports": {"22/tcp": [{"HostPort": "22222"}]},
             "dph_total": 0.50,
-            "start_date": None,
         }
         base.update(overrides)
         return base
