@@ -43,12 +43,13 @@ _CMD_HELP = {
         "detail": "Syncs with the Vast.ai API each time.",
     },
     "start": {
-        "usage": "vst start [name] [-n]",
+        "usage": "vst start [name] [--all] [-n]",
         "desc": "Start a stopped or exited instance.",
         "detail": "Waits for the instance to be ready, then connects automatically.",
         "examples": [
             ("vst start", "start and connect"),
             ("vst start train", "start by alias"),
+            ("vst start --all", "start all stopped instances"),
             ("vst start -n", "start without connecting"),
         ],
     },
@@ -259,6 +260,7 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argumen
     # Start
     p = subparsers.add_parser("start", help="start a stopped instance")
     p.add_argument("name", nargs="?", help=f"instance name or alias ({hint})")
+    p.add_argument("--all", action="store_true", help="start all stopped instances")
     p.add_argument(
         "-n", "--no-connect", action="store_true", help="start without connecting"
     )

@@ -61,7 +61,7 @@ vst [name]                   # connect by name or alias
 vst -f                       # re-run remote setup even if already done
 vst -n                       # open IDE without cloning or installing
 vst list                     # list all instances (running, stopped, etc.)
-vst start [name]             # start a stopped instance, wait, then connect
+vst start [name | --all]     # start a stopped instance, wait, then connect
 vst start -n                 # start without connecting
 vst stop [name | --all] [-y]  # stop an instance (or all)
 vst destroy [name | --all] [-y]  # destroy an instance (irreversible)

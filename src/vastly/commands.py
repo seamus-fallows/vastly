@@ -650,24 +650,29 @@ def cmd_start(args: argparse.Namespace) -> None:
     if not non_running:
         raise VastlyError("All instances are already running. Run 'vst' to connect.")
 
-    inst = select_instance(non_running, args.name)[0]
-    vastly.verbose(f"Starting instance {inst.display_name} (status: {inst.status})")
+    selected = select_instance(
+        non_running, args.name, allow_all=getattr(args, "all", False),
+    )
 
-    queued = False
-    if inst.status in STOPPED_STATES:
-        queued = _vastai_start(inst)
-    elif inst.status in TRANSITIONAL_STATES:
-        print(dim(f"  {inst.display_name} is already starting, waiting..."))
-    else:
-        raise VastlyError(f"Cannot start {inst.display_name} -- it is inactive and not startable.")
+    for inst in selected:
+        vastly.verbose(f"Starting instance {inst.display_name} (status: {inst.status})")
+
+        queued = False
+        if inst.status in STOPPED_STATES:
+            queued = _vastai_start(inst)
+        elif inst.status in TRANSITIONAL_STATES:
+            print(dim(f"  {inst.display_name} is already starting, waiting..."))
+        else:
+            raise VastlyError(f"Cannot start {inst.display_name} -- it is inactive and not startable.")
+
+        if not args.no_connect:
+            _poll_for_running(str(inst.id), inst.display_name, queued=queued)
 
     if args.no_connect:
         return
 
-    _poll_for_running(str(inst.id), inst.display_name, queued=queued)
-
-    # Auto-connect: triggers a fresh sync_instances which writes SSH configs
-    _do_connect(name=inst.alias or inst.name)
+    # Auto-connect to the first instance (or only instance)
+    _do_connect(name=selected[0].alias or selected[0].name)
 
 
 def cmd_config(args: argparse.Namespace) -> None:
