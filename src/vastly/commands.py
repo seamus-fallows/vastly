@@ -402,6 +402,7 @@ def _do_connect(
             try:
                 to_start = select_instance(
                     startable, prompt="Start a different instance?",
+                    allow_all=True,
                 )
             except VastlyError:
                 return
