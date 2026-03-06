@@ -666,9 +666,10 @@ def cmd_start(args: argparse.Namespace) -> None:
     if not non_running:
         raise VastlyError("All instances are already running. Run 'vst' to connect.")
 
-    selected = select_instance(
-        non_running, args.name, allow_all=getattr(args, "all", False),
-    )
+    if getattr(args, "all", False):
+        selected = non_running
+    else:
+        selected = select_instance(non_running, args.name, allow_all=True)
 
     for inst in selected:
         vastly.verbose(f"Starting instance {inst.display_name} (status: {inst.status})")
