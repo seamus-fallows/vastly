@@ -142,7 +142,8 @@ def _print_help() -> None:
     ]
     print(f"\n{cyan('usage:')} vst [name] [-f | -n]\n")
     print("Connect to a Vast.ai instance and open your IDE.")
-    print(dim("Run with no arguments to auto-select, or pass a name.\n"))
+    print(dim("Run with no arguments to auto-select, or pass a name."))
+    print(dim("Auto-starts stopped instances if none are running.\n"))
     _print_section("commands", commands)
     print()
     _print_section("options", options)
