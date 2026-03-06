@@ -1986,7 +1986,7 @@ class TestCmdNameSshCleanup:
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
         monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
-            "vastly.commands.get_running_instances",
+            "vastly.commands.get_synced_instances",
             lambda _: [
                 _inst(
                     name="1xRTX4090-TW",
