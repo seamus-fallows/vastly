@@ -840,7 +840,8 @@ def cmd_ssh(args: argparse.Namespace) -> None:
                 remote_cmd = [args.name] + remote_cmd
                 selected = select_instance(running, allow_all=True)
     else:
-        selected = select_instance(running, allow_all=True)
+        # Only offer "All" when a remote command will be run (not interactive shell)
+        selected = select_instance(running, allow_all=bool(remote_cmd))
 
     # Multiple instances only makes sense with a remote command
     if len(selected) > 1 and not remote_cmd:
