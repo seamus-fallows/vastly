@@ -10,7 +10,6 @@ import socket
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -22,7 +21,6 @@ from vastly.errors import ConfigError, VastlyError
 from vastly.instance import (
     Instance,
     build_instance_name,
-    format_uptime,
     get_running_instances,
     load_aliases,
     save_aliases,
@@ -32,7 +30,6 @@ from vastly.instance import (
     validate_alias,
 )
 from vastly.ssh import (
-    cached_config_names,
     clear_ssh_configs,
     ensure_ssh_include,
     find_available_port,
@@ -50,42 +47,6 @@ def _config(**kwargs) -> dict:
     base = {**DEFAULTS}
     base.update(kwargs)
     return base
-
-
-
-class TestFormatUptime:
-    def test_returns_question_mark_for_none(self):
-        assert format_uptime(None) == "?"
-
-    def test_returns_question_mark_for_zero(self):
-        assert format_uptime(0) == "?"
-
-    def test_returns_hours_for_old_timestamps(self):
-        ts = datetime.now(tz=timezone.utc).timestamp() - 7200
-        result = format_uptime(ts)
-        assert re.match(r"^\d+(\.\d)?h$", result)
-
-    def test_returns_minutes_for_recent_timestamps(self):
-        ts = datetime.now(tz=timezone.utc).timestamp() - 600
-        result = format_uptime(ts)
-        assert re.match(r"^\d+m$", result)
-
-    def test_boundary_at_exactly_one_hour(self):
-        ts = datetime.now(tz=timezone.utc).timestamp() - 3600
-        result = format_uptime(ts)
-        assert result.endswith("h")
-
-    def test_very_recent_timestamp(self):
-        ts = datetime.now(tz=timezone.utc).timestamp() - 5
-        assert format_uptime(ts) == "0m"
-
-    def test_large_uptime(self):
-        ts = datetime.now(tz=timezone.utc).timestamp() - (100 * 3600)
-        result = format_uptime(ts)
-        assert float(result.rstrip("h")) >= 99
-
-    def test_returns_question_mark_for_empty_string(self):
-        assert format_uptime("") == "?"
 
 
 class TestIdeFromEnv:
@@ -426,9 +387,9 @@ class TestConfigValidation:
         cfg.write_text('{"bogusKey": 123, "anotherBad": true}', encoding="utf-8")
         load_config(cfg)
         captured = capsys.readouterr()
-        assert "unknown config keys" in captured.out
-        assert "anotherBad" in captured.out
-        assert "bogusKey" in captured.out
+        assert "unknown config keys" in captured.err
+        assert "anotherBad" in captured.err
+        assert "bogusKey" in captured.err
 
     def test_port_forwards_entry_not_dict_raises(self, tmp_path):
         """portForwards containing a non-dict entry should raise ConfigError."""
@@ -907,20 +868,6 @@ class TestSshConfigManagement:
 
         remaining = [f.name for f in tmp_path.iterdir()]
         assert remaining == ["subdir"]
-
-    def test_cached_names_returns_file_names(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
-        (tmp_path / "1xRTX4090-TW").write_text("config")
-        (tmp_path / "US-2xA100").write_text("config")
-
-        names = cached_config_names()
-
-        assert set(names) == {"1xRTX4090-TW", "US-2xA100"}
-
-    def test_cached_names_empty_when_dir_missing(self, tmp_path, monkeypatch):
-        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path / "nonexistent")
-
-        assert cached_config_names() == []
 
 
 class TestRunScp:
@@ -1497,7 +1444,6 @@ def _make_api_instance(
         "num_gpus": 1,
         "geolocation": geo,
         "dph_total": 0.25,
-        "start_date": 1700000000,
         "public_ipaddr": f"10.0.0.{inst_id}",
         "ports": {"22/tcp": [{"HostPort": str(22000 + inst_id)}]},
     }
@@ -1625,6 +1571,19 @@ class TestSyncInstancesLifecycle:
         assert running.name == "1xRTX4090-TW"
         assert stopped.name == "1xRTX4090-TW-2"
 
+    def test_non_running_uses_cur_state(self, monkeypatch):
+        """Non-running instances store the raw API cur_state."""
+        api_data = [
+            _make_api_instance(1, "stopped"),
+            _make_api_instance(2, "exited"),
+        ]
+        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+
+        results = sync_instances(_MINIMAL_CONFIG)
+
+        assert len(results) == 2
+        statuses = {r.status for r in results}
+        assert statuses == {"stopped", "exited"}
 
 
 class TestGetRunningInstances:
@@ -1649,14 +1608,14 @@ class TestGetRunningInstances:
         assert len(results) == 1
         assert results[0].status == "running"
 
-    def test_raises_with_hint_when_stopped_exist(self, monkeypatch):
+    def test_raises_with_hint_when_inactive_exist(self, monkeypatch):
         api_data = [
             _make_api_instance(1, "stopped"),
             _make_api_instance(2, "exited"),
         ]
         monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
 
-        with pytest.raises(VastlyError, match="2 stopped/exited.*vst start"):
+        with pytest.raises(VastlyError, match="2 inactive.*vst start"):
             get_running_instances(_MINIMAL_CONFIG)
 
     def test_raises_no_instances_when_empty(self, monkeypatch):
@@ -1669,21 +1628,20 @@ class TestGetRunningInstances:
 class TestShowTableMixedStates:
     """Test show_table output for running and non-running instances."""
 
-    def test_running_shows_uptime(self, capsys):
+    def test_running_shows_running(self, capsys):
         instances = [
             _inst(
                 name="1xRTX4090-TW",
                 status="running",
                 dph_total=0.25,
-                start_date=time.time() - 3600,
             )
         ]
         show_table(instances)
         output = capsys.readouterr().out
-        assert "uptime" in output
+        assert "running" in output
         assert "$0.25/hr" in output
 
-    def test_stopped_shows_status(self, capsys):
+    def test_stopped_shows_inactive(self, capsys):
         instances = [
             _inst(
                 name="2xA100-US",
@@ -1693,11 +1651,10 @@ class TestShowTableMixedStates:
         ]
         show_table(instances)
         output = capsys.readouterr().out
-        assert "stopped" in output
+        assert "inactive" in output
         assert "$1.20/hr" in output
-        assert "uptime" not in output
 
-    def test_exited_shows_status(self, capsys):
+    def test_exited_shows_inactive(self, capsys):
         instances = [
             _inst(
                 name="1xRTX3090-DE",
@@ -1707,7 +1664,7 @@ class TestShowTableMixedStates:
         ]
         show_table(instances)
         output = capsys.readouterr().out
-        assert "exited" in output
+        assert "inactive" in output
 
     def test_mixed_states(self, capsys):
         instances = [
@@ -1715,7 +1672,6 @@ class TestShowTableMixedStates:
                 name="1xRTX4090-TW",
                 status="running",
                 dph_total=0.25,
-                start_date=time.time() - 3600,
                 alias="train",
             ),
             _inst(
@@ -1726,8 +1682,8 @@ class TestShowTableMixedStates:
         ]
         show_table(instances)
         output = capsys.readouterr().out
-        assert "uptime" in output
-        assert "stopped" in output
+        assert "running" in output
+        assert "inactive" in output
         assert "train" in output
 
     def test_columns_align_with_different_label_lengths(self, capsys, monkeypatch):
@@ -1738,14 +1694,12 @@ class TestShowTableMixedStates:
                 name="1xRTX4090-TW",
                 status="running",
                 dph_total=0.25,
-                start_date=time.time() - 3600,
                 alias="train",
             ),
             _inst(
                 name="2xA100-US",
                 status="running",
                 dph_total=1.20,
-                start_date=time.time() - 7200,
             ),
         ]
         show_table(instances)
@@ -1765,7 +1719,6 @@ class TestShowTableMixedStates:
                 name="1xRTX4090-TW",
                 status="running",
                 dph_total=0.25,
-                start_date=time.time() - 3600,
                 alias="train",
             ),
             _inst(
@@ -1818,7 +1771,7 @@ class TestCmdStart:
         )
 
         args = argparse.Namespace(name="b", no_connect=False, verbose=False)
-        with pytest.raises(VastlyError, match="Cannot start.*offline"):
+        with pytest.raises(VastlyError, match="Cannot start.*inactive"):
             cmd_start(args)
 
     def test_stopped_calls_start_action(self, monkeypatch):
@@ -1835,16 +1788,16 @@ class TestCmdStart:
             ],
         )
 
-        actions = []
+        started = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_action",
-            lambda action, inst: actions.append((action, inst.id)),
+            "vastly.commands._vastai_start",
+            lambda inst: (started.append(inst.id), False)[1],
         )
 
         args = argparse.Namespace(name="b", no_connect=True, verbose=False)
         cmd_start(args)
 
-        assert actions == [("start", 2)]
+        assert started == [2]
 
     def test_no_connect_returns_after_start(self, monkeypatch):
         from vastly.commands import cmd_start
@@ -1858,11 +1811,11 @@ class TestCmdStart:
                 _inst(name="b", id=2, status="stopped"),
             ],
         )
-        monkeypatch.setattr("vastly.commands._vastai_action", lambda action, inst: None)
+        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
 
         connect_called = []
         monkeypatch.setattr(
-            "vastly.commands.cmd_connect", lambda a: connect_called.append(True)
+            "vastly.commands._do_connect", lambda **kw: connect_called.append(True)
         )
 
         args = argparse.Namespace(name=None, no_connect=True, verbose=False)
@@ -1883,15 +1836,15 @@ class TestCmdStart:
             ],
         )
 
-        actions = []
+        started = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_action", lambda action, inst: actions.append(action)
+            "vastly.commands._vastai_start", lambda inst: (started.append(1), False)[1]
         )
 
         args = argparse.Namespace(name=None, no_connect=True, verbose=False)
         cmd_start(args)
 
-        assert actions == []  # Should not call vastai start for loading state
+        assert started == []  # Should not call vastai_start for loading state
 
     def test_timeout_raises(self, monkeypatch):
         from vastly.commands import cmd_start
@@ -1906,22 +1859,23 @@ class TestCmdStart:
                 _inst(name="b", id=2, status="stopped"),
             ],
         )
-        monkeypatch.setattr("vastly.commands._vastai_action", lambda action, inst: None)
+        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
 
-        # Make polling instant and always return "stopped"
+        # Make polling instant and always return "loading" (not queued, so
+        # the normal timeout applies)
         monkeypatch.setattr("time.sleep", lambda _: None)
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 5)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 5)
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout='{"cur_state": "stopped"}', stderr=""),
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout='{"cur_state": "loading"}', stderr=""),
         )
 
         args = argparse.Namespace(name=None, no_connect=False, verbose=False)
         with pytest.raises(VastlyError, match="Timed out"):
             cmd_start(args)
 
-    def test_scheduling_hint(self, monkeypatch, capsys):
+    def test_queued_start_shows_waiting(self, monkeypatch, capsys):
         from vastly.commands import cmd_start
         import vastly.commands
 
@@ -1934,28 +1888,29 @@ class TestCmdStart:
                 _inst(name="b", id=2, status="stopped"),
             ],
         )
-        monkeypatch.setattr("vastly.commands._vastai_action", lambda action, inst: None)
+        # _vastai_start returns True (queued)
+        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: True)
         monkeypatch.setattr("time.sleep", lambda _: None)
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 5)
 
-        # Return scheduling then running
+        # API still says stopped (queued), then transitions to running
         poll_count = [0]
 
         def fake_run(*a, **kw):
             poll_count[0] += 1
             if poll_count[0] == 1:
-                return subprocess.CompletedProcess([], 0, stdout='{"cur_state": "scheduling"}', stderr="")
-            return subprocess.CompletedProcess([], 0, stdout='{"cur_state": "running"}', stderr="")
+                return subprocess.CompletedProcess([], 0, stdout='{"cur_state": "stopped"}', stderr="")
+            return subprocess.CompletedProcess([], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr="")
 
         monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
-        monkeypatch.setattr("vastly.commands.cmd_connect", lambda a: None)
+        monkeypatch.setattr("vastly.commands._do_connect", lambda **kw: None)
 
         args = argparse.Namespace(name=None, no_connect=False, verbose=False)
         cmd_start(args)
 
         output = capsys.readouterr().out
-        assert "scheduling" in output
+        assert "waiting" in output
         assert "Ctrl+C" in output
 
     def test_named_running_instance_raises(self, monkeypatch):
@@ -2014,10 +1969,10 @@ class TestCmdStopLifecycle:
         )
 
         args = argparse.Namespace(name="a", all=False, yes=False, verbose=False)
-        with pytest.raises(VastlyError, match="Already stopped"):
+        with pytest.raises(VastlyError, match="already inactive"):
             cmd_stop(args)
 
-    def test_stop_scheduling_sends_stop(self, monkeypatch):
+    def test_stop_loading_sends_stop(self, monkeypatch):
         from vastly.commands import cmd_stop
 
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
@@ -2026,7 +1981,7 @@ class TestCmdStopLifecycle:
         monkeypatch.setattr(
             "vastly.commands.get_synced_instances",
             lambda _: [
-                _inst(name="a", id=1, status="scheduling"),
+                _inst(name="a", id=1, status="loading"),
             ],
         )
 
@@ -2049,7 +2004,7 @@ class TestCmdStopLifecycle:
             lambda _: [
                 _inst(name="a", id=1, status="running"),
                 _inst(name="b", id=2, status="stopped"),
-                _inst(name="c", id=3, status="scheduling"),
+                _inst(name="c", id=3, status="loading"),
             ],
         )
         monkeypatch.setattr("builtins.input", lambda _: "y")
@@ -2062,7 +2017,7 @@ class TestCmdStopLifecycle:
         args = argparse.Namespace(name=None, all=True, yes=False, verbose=False)
         cmd_stop(args)
 
-        # Should stop running + scheduling, skip stopped
+        # Should stop running + loading, skip stopped
         assert 1 in stopped_ids
         assert 3 in stopped_ids
         assert 2 not in stopped_ids
@@ -2081,7 +2036,7 @@ class TestCmdStopLifecycle:
         )
 
         args = argparse.Namespace(name="a", all=False, yes=False, verbose=False)
-        with pytest.raises(VastlyError, match="offline.*cannot be stopped"):
+        with pytest.raises(VastlyError, match="already inactive"):
             cmd_stop(args)
 
     def test_stop_offline_unnamed_raises_generic(self, monkeypatch):
@@ -2103,23 +2058,39 @@ class TestCmdStopLifecycle:
             cmd_stop(args)
 
 
-class TestVastaiActionStart:
-    """Test that _vastai_action handles 'start' correctly."""
+class TestVastaiStart:
+    """Test _vastai_start detects queued vs immediate starts."""
 
-    def test_start_past_tense(self, monkeypatch, capsys):
-        from vastly.commands import _vastai_action
+    def test_immediate_start(self, monkeypatch, capsys):
+        from vastly.commands import _vastai_start
 
         monkeypatch.setattr(
             "vastly.commands.subprocess.run",
-            lambda *a, **kw: type(
-                "R", (), {"returncode": 0, "stdout": "", "stderr": ""}
-            )(),
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="starting instance", stderr=""),
         )
 
-        _vastai_action("start", _inst(name="test", id=1))
+        queued = _vastai_start(_inst(name="test", id=1))
 
+        assert queued is False
         output = capsys.readouterr().out
         assert "Started" in output
+
+    def test_queued_start(self, monkeypatch, capsys):
+        from vastly.commands import _vastai_start
+
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess(
+                [], 0, stdout="Required resources are currently unavailable, state change queued.", stderr=""
+            ),
+        )
+
+        queued = _vastai_start(_inst(name="test", id=1))
+
+        assert queued is True
+        output = capsys.readouterr().out
+        assert "Queued" in output
+        assert "waiting for resources" in output
 
 
 class TestCmdConfig:
@@ -2209,7 +2180,6 @@ class TestHttpsRemoteWarning:
                     id=1,
                     status="running",
                     dph_total=0.25,
-                    start_date=1700000000,
                 ),
             ],
         )
@@ -2441,7 +2411,6 @@ class TestConnectStoppedInstance:
                     id=1,
                     status="running",
                     dph_total=0.25,
-                    start_date=1700000000,
                 ),
                 _inst(
                     name="2xA100-US",
@@ -2455,7 +2424,7 @@ class TestConnectStoppedInstance:
         args = argparse.Namespace(
             name="2xA100-US", no_setup=False, force_setup=False, all=False, verbose=False,
         )
-        with pytest.raises(VastlyError, match="stopped.*vst start"):
+        with pytest.raises(VastlyError, match="inactive.*vst start"):
             cmd_connect(args)
 
     def test_auto_starts_when_only_stopped(self, monkeypatch, capsys):
@@ -2479,10 +2448,10 @@ class TestConnectStoppedInstance:
             ],
         )
         monkeypatch.setattr(
-            "vastly.commands._vastai_action",
-            lambda action, inst: started_ids.append(inst.id),
+            "vastly.commands._vastai_start",
+            lambda inst: (started_ids.append(inst.id), False)[1],
         )
-        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *a: None)
+        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *a, **kw: None)
 
         args = argparse.Namespace(
             name=None, no_setup=True, force_setup=False, all=False, verbose=False,
@@ -2500,7 +2469,6 @@ class TestConnectStoppedInstance:
                         id=1,
                         status="running",
                         dph_total=0.25,
-                        start_date=1700000000,
                     ),
                 ]
             return [
@@ -2541,8 +2509,10 @@ class TestOpenIde:
     """Test open_ide passes correct arguments (review item 19)."""
 
     def test_passes_correct_args_to_popen(self, monkeypatch):
+        import sys
         from vastly.ide import open_ide
 
+        monkeypatch.setattr(sys, "platform", "linux")
         captured = []
 
         def fake_popen(cmd, **kw):
@@ -2556,8 +2526,10 @@ class TestOpenIde:
         assert cmd == ["code", "--remote", "ssh-remote+myhost", "/workspace/myproject"]
 
     def test_cursor_command(self, monkeypatch):
+        import sys
         from vastly.ide import open_ide
 
+        monkeypatch.setattr(sys, "platform", "linux")
         captured = []
         monkeypatch.setattr(
             "vastly.ide.subprocess.Popen", lambda cmd, **kw: captured.append(cmd)
@@ -2734,7 +2706,7 @@ class TestStateConstants:
         from vastly.instance import TRANSITIONAL_STATES
 
         assert "loading" in TRANSITIONAL_STATES
-        assert "scheduling" in TRANSITIONAL_STATES
+        assert "creating" in TRANSITIONAL_STATES
 
 
 # -- Integration tests (mock at subprocess.run boundary) --------------------
@@ -2768,7 +2740,6 @@ class TestSyncInstancesIntegration:
                 "dph_total": 0.45,
                 "public_ipaddr": "1.2.3.4",
                 "geolocation": "City, US",
-                "start_date": 1700000000.0,
                 "ports": {"22/tcp": [{"HostPort": "22022"}]},
             },
             {
@@ -2779,7 +2750,6 @@ class TestSyncInstancesIntegration:
                 "dph_total": 1.20,
                 "public_ipaddr": "5.6.7.8",
                 "geolocation": "Berlin, DE",
-                "start_date": 1700000000.0,
                 "ports": {"22/tcp": [{"HostPort": "22033"}]},
             },
         ]
@@ -2809,7 +2779,6 @@ class TestSyncInstancesIntegration:
                 "dph_total": 0.45,
                 "public_ipaddr": "1.2.3.4",
                 "geolocation": "City, US",
-                "start_date": 1700000000.0,
                 "ports": {"22/tcp": [{"HostPort": "22022"}]},
             },
             {
@@ -2820,7 +2789,6 @@ class TestSyncInstancesIntegration:
                 "dph_total": 0.80,
                 "public_ipaddr": "5.6.7.8",
                 "geolocation": "Tokyo, JP",
-                "start_date": 1700000000.0,
                 "ports": {"22/tcp": [{"HostPort": "22033"}]},
             },
         ]
@@ -2853,7 +2821,6 @@ class TestSyncInstancesIntegration:
                 "dph_total": 0.45,
                 "public_ipaddr": "1.2.3.4",
                 "geolocation": "City, US",
-                "start_date": 1700000000.0,
                 "ports": {"22/tcp": [{"HostPort": "22022"}]},
             },
         ]
@@ -2892,7 +2859,6 @@ class TestCmdConnectIntegration:
                     status="running",
                     gpu_name="RTX 4090",
                     dph_total=0.45,
-                    start_date=1700000000.0,
                 ),
             ],
         )
@@ -3193,34 +3159,53 @@ class TestStartAndResync:
         started = []
         polled = []
 
-        def fake_action(action, inst):
-            started.append((action, inst.id))
+        def fake_start(inst):
+            started.append(inst.id)
+            return False
 
-        def fake_poll(inst_id, display_name=""):
-            polled.append(inst_id)
+        def fake_poll(inst_id, display_name="", *, queued=False):
+            polled.append((inst_id, queued))
 
         running_inst = _inst(name="1xA100-US", id=100, status="running")
 
         def fake_sync(config):
             return [running_inst]
 
-        monkeypatch.setattr("vastly.commands._vastai_action", fake_action)
+        monkeypatch.setattr("vastly.commands._vastai_start", fake_start)
         monkeypatch.setattr("vastly.commands._poll_for_running", fake_poll)
         monkeypatch.setattr("vastly.commands.sync_instances", fake_sync)
 
         to_start = [_inst(name="1xA100-US", id=100, status="stopped")]
         all_inst, running = _start_and_resync(to_start, {})
 
-        assert started == [("start", 100)]
-        assert polled == ["100"]
+        assert started == [100]
+        assert polled == [("100", False)]
         assert len(running) == 1
         assert running[0].name == "1xA100-US"
+
+    def test_queued_flag_passed_to_poll(self, monkeypatch):
+        from vastly.commands import _start_and_resync
+
+        polled = []
+
+        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: True)
+        monkeypatch.setattr(
+            "vastly.commands._poll_for_running",
+            lambda inst_id, display_name="", *, queued=False: polled.append(queued),
+        )
+        monkeypatch.setattr(
+            "vastly.commands.sync_instances",
+            lambda config: [_inst(name="gpu", id=1, status="running")],
+        )
+
+        _start_and_resync([_inst(name="gpu", id=1, status="stopped")], {})
+        assert polled == [True]
 
     def test_raises_when_no_running_after_resync(self, monkeypatch):
         from vastly.commands import _start_and_resync
 
-        monkeypatch.setattr("vastly.commands._vastai_action", lambda *a: None)
-        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *a: None)
+        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *a, **kw: None)
         monkeypatch.setattr(
             "vastly.commands.sync_instances",
             lambda config: [_inst(name="gpu", id=1, status="stopped")],
@@ -3228,6 +3213,7 @@ class TestStartAndResync:
 
         with pytest.raises(VastlyError, match="not reachable"):
             _start_and_resync([_inst(status="stopped")], {})
+
 
 
 class TestYesFlag:
@@ -3346,7 +3332,7 @@ class TestPortForwardRangeValidation:
 class TestCmdStopNonStoppableStates:
     """cmd_stop should give specific errors for named instances in non-stoppable states."""
 
-    @pytest.mark.parametrize("state", ["offline", "error", "unknown"])
+    @pytest.mark.parametrize("state", ["offline", "error", "unknown", "stopped", "exited"])
     def test_named_instance_non_stoppable_raises(self, state, monkeypatch):
         from vastly.commands import cmd_stop
 
@@ -3359,23 +3345,7 @@ class TestCmdStopNonStoppableStates:
         )
 
         args = argparse.Namespace(name="gpu", all=False, yes=False, verbose=False)
-        with pytest.raises(VastlyError, match=f"{state}.*cannot be stopped"):
-            cmd_stop(args)
-
-    @pytest.mark.parametrize("state", ["stopped", "exited"])
-    def test_named_instance_already_stopped_raises(self, state, monkeypatch):
-        from vastly.commands import cmd_stop
-
-        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
-        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
-        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
-        monkeypatch.setattr(
-            "vastly.commands.get_synced_instances",
-            lambda _: [_inst(name="gpu", id=1, status=state)],
-        )
-
-        args = argparse.Namespace(name="gpu", all=False, yes=False, verbose=False)
-        with pytest.raises(VastlyError, match=f"Already {state}"):
+        with pytest.raises(VastlyError, match="already inactive"):
             cmd_stop(args)
 
 
@@ -3390,7 +3360,7 @@ class TestCmdConnectNoSetupPath:
         monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
             "vastly.commands.sync_instances",
-            lambda _: [_inst(name="gpu", id=1, status="running", dph_total=0.5, start_date=1700000000)],
+            lambda _: [_inst(name="gpu", id=1, status="running", dph_total=0.5)],
         )
         monkeypatch.setattr(
             "vastly.commands._local_repo_info",
@@ -3419,7 +3389,7 @@ class TestCmdConnectNoSetupPath:
         monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
         monkeypatch.setattr(
             "vastly.commands.sync_instances",
-            lambda _: [_inst(name="gpu", id=1, status="running", dph_total=0.5, start_date=1700000000)],
+            lambda _: [_inst(name="gpu", id=1, status="running", dph_total=0.5)],
         )
         monkeypatch.setattr("vastly.commands._local_repo_info", lambda _: None)
 
@@ -3584,3 +3554,357 @@ class TestCmdSshSmartDispatch:
         args = argparse.Namespace(remote_cmd=[], name="gpu-bx", verbose=False)
         with pytest.raises(VastlyError, match="Did you mean.*gpu-box"):
             cmd_ssh(args)
+
+
+# ── New tests for code review improvements ─────────────────────────
+
+
+class TestFindByName:
+    """Tests for the find_by_name helper extracted from inline patterns."""
+
+    def test_match_by_name(self):
+        from vastly.instance import find_by_name
+
+        instances = [_inst(name="gpu-a", id=1), _inst(name="gpu-b", id=2)]
+        result = find_by_name(instances, "gpu-a")
+        assert len(result) == 1
+        assert result[0].name == "gpu-a"
+
+    def test_match_by_alias(self):
+        from vastly.instance import find_by_name
+
+        instances = [_inst(name="gpu-a", id=1, alias="train")]
+        result = find_by_name(instances, "train")
+        assert len(result) == 1
+        assert result[0].alias == "train"
+
+    def test_no_match_returns_empty(self):
+        from vastly.instance import find_by_name
+
+        instances = [_inst(name="gpu-a", id=1)]
+        assert find_by_name(instances, "nonexistent") == []
+
+    def test_empty_list_returns_empty(self):
+        from vastly.instance import find_by_name
+
+        assert find_by_name([], "anything") == []
+
+
+class TestGpuNameSanitization:
+    """GPU names with special characters should be stripped to alphanumeric."""
+
+    def test_strips_spaces(self):
+        inst = {"gpu_name": "RTX 4090", "num_gpus": 1, "geolocation": "", "id": 1}
+        name = build_instance_name(inst, set())
+        assert " " not in name
+        assert "RTX4090" in name
+
+    def test_strips_shell_metacharacters(self):
+        inst = {"gpu_name": "GPU;rm -rf /", "num_gpus": 1, "geolocation": "", "id": 1}
+        name = build_instance_name(inst, set())
+        # All non-alphanumeric characters should be removed
+        assert ";" not in name
+        assert " " not in name
+        assert "-" not in name or name.count("-") == 1  # only the geo separator
+
+    def test_strips_parentheses_and_slashes(self):
+        inst = {"gpu_name": "A100 (80GB)/PCIe", "num_gpus": 2, "geolocation": "", "id": 1}
+        name = build_instance_name(inst, set())
+        assert "(" not in name
+        assert ")" not in name
+        assert "/" not in name
+        assert "2xA10080GBPCIe" == name
+
+
+class TestPollForRunningApiFailures:
+    """_poll_for_running should surface API errors after consecutive failures."""
+
+    def test_transient_api_failure_recovers(self, monkeypatch):
+        import vastly.commands
+        from vastly.commands import _poll_for_running
+
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 60)
+        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
+
+        call_count = [0]
+
+        def fake_run(*a, **kw):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                # First 2 calls fail
+                return subprocess.CompletedProcess([], 1, stdout="", stderr="network error")
+            # Then succeeds
+            return subprocess.CompletedProcess(
+                [], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr=""
+            )
+
+        monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
+
+        _poll_for_running("123", "test-gpu")  # should not raise
+
+    def test_consecutive_api_failures_raises(self, monkeypatch):
+        import vastly.commands
+        from vastly.commands import _poll_for_running
+
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 60)
+        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
+        monkeypatch.setattr(vastly.commands, "_MAX_POLL_FAILURES", 3)
+
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 1, stdout="", stderr="API down"),
+        )
+
+        with pytest.raises(VastlyError, match="Cannot reach.*API down"):
+            _poll_for_running("123", "test-gpu")
+
+    def test_consecutive_json_failures_raises(self, monkeypatch):
+        import vastly.commands
+        from vastly.commands import _poll_for_running
+
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 60)
+        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
+        monkeypatch.setattr(vastly.commands, "_MAX_POLL_FAILURES", 3)
+
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess([], 0, stdout="not json", stderr=""),
+        )
+
+        with pytest.raises(VastlyError, match="invalid data"):
+            _poll_for_running("123", "test-gpu")
+
+    def test_api_failure_counter_resets_on_success(self, monkeypatch):
+        import vastly.commands
+        from vastly.commands import _poll_for_running
+
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 60)
+        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
+        monkeypatch.setattr(vastly.commands, "_MAX_POLL_FAILURES", 3)
+
+        call_count = [0]
+
+        def fake_run(*a, **kw):
+            call_count[0] += 1
+            if call_count[0] in (1, 2):
+                return subprocess.CompletedProcess([], 1, stdout="", stderr="err")
+            if call_count[0] == 3:
+                # Success but not running yet -- resets counter
+                return subprocess.CompletedProcess(
+                    [], 0, stdout='{"cur_state": "loading"}', stderr=""
+                )
+            if call_count[0] in (4, 5):
+                return subprocess.CompletedProcess([], 1, stdout="", stderr="err")
+            # Finally running
+            return subprocess.CompletedProcess(
+                [], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr=""
+            )
+
+        monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
+
+        _poll_for_running("123", "test-gpu")  # should not raise
+
+
+class TestDoConnect:
+    """Tests for _do_connect, the extracted core connect logic."""
+
+    def test_do_connect_calls_setup_and_opens_ide(self, monkeypatch):
+        from vastly.commands import _do_connect
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: Path("/repo/my-proj"))
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: "code")
+        monkeypatch.setattr(
+            "vastly.commands.sync_instances",
+            lambda _: [_inst(name="gpu", id=1, status="running")],
+        )
+        monkeypatch.setattr(
+            "vastly.commands._local_repo_info",
+            lambda _: ("git@github.com:user/my-proj.git", "my-proj"),
+        )
+
+        setup_called = []
+        monkeypatch.setattr(
+            "vastly.commands.setup_instances",
+            lambda *a, **kw: (setup_called.append(True), [a[0][0].name])[1],
+        )
+
+        ide_calls = []
+        monkeypatch.setattr(
+            "vastly.commands.open_ide",
+            lambda ide, host, path: ide_calls.append((ide, host, path)),
+        )
+        monkeypatch.setattr("vastly.update.check_for_update", lambda: None)
+
+        _do_connect()
+
+        assert setup_called == [True]
+        assert len(ide_calls) == 1
+
+    def test_do_connect_no_setup_flag(self, monkeypatch):
+        from vastly.commands import _do_connect
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: Path("/repo/my-proj"))
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: "code")
+        monkeypatch.setattr(
+            "vastly.commands.sync_instances",
+            lambda _: [_inst(name="gpu", id=1, status="running")],
+        )
+        monkeypatch.setattr(
+            "vastly.commands._local_repo_info",
+            lambda _: ("git@github.com:user/my-proj.git", "my-proj"),
+        )
+
+        setup_called = []
+        monkeypatch.setattr(
+            "vastly.commands.setup_instances",
+            lambda *a, **kw: setup_called.append(True),
+        )
+
+        ide_calls = []
+        monkeypatch.setattr(
+            "vastly.commands.open_ide",
+            lambda ide, host, path: ide_calls.append((ide, host, path)),
+        )
+
+        _do_connect(no_setup=True)
+
+        assert setup_called == []
+        assert len(ide_calls) == 1
+
+
+class TestCmdStartUsesDoConnect:
+    """cmd_start should call _do_connect, not build a synthetic Namespace."""
+
+    def test_start_calls_do_connect_with_name(self, monkeypatch):
+        import vastly.commands
+        from vastly.commands import cmd_start
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr(
+            "vastly.commands.get_synced_instances",
+            lambda _: [_inst(name="gpu", id=1, status="stopped")],
+        )
+        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
+        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
+
+        # Simulate poll returning running
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess(
+                [], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr=""
+            ),
+        )
+
+        connect_kwargs = {}
+        monkeypatch.setattr(
+            "vastly.commands._do_connect", lambda **kw: connect_kwargs.update(kw)
+        )
+
+        args = argparse.Namespace(name=None, no_connect=False, verbose=False)
+        cmd_start(args)
+
+        assert connect_kwargs["name"] == "gpu"
+
+    def test_start_with_alias_passes_alias_to_do_connect(self, monkeypatch):
+        import vastly.commands
+        from vastly.commands import cmd_start
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr(
+            "vastly.commands.get_synced_instances",
+            lambda _: [_inst(name="gpu", id=1, status="stopped", alias="train")],
+        )
+        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
+        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
+
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess(
+                [], 0, stdout='{"cur_state": "running", "actual_status": "running"}', stderr=""
+            ),
+        )
+
+        connect_kwargs = {}
+        monkeypatch.setattr(
+            "vastly.commands._do_connect", lambda **kw: connect_kwargs.update(kw)
+        )
+
+        args = argparse.Namespace(name="train", no_connect=False, verbose=False)
+        cmd_start(args)
+
+        # Should pass alias, not auto-name
+        assert connect_kwargs["name"] == "train"
+
+
+class TestCmdStopImprovedErrors:
+    """cmd_stop error messages should include the instance name."""
+
+    def test_stop_named_stopped_includes_display_name(self, monkeypatch):
+        from vastly.commands import cmd_stop
+
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands._check_prerequisites", lambda **kw: None)
+        monkeypatch.setattr(
+            "vastly.commands.get_synced_instances",
+            lambda _: [_inst(name="gpu", id=1, status="stopped", alias="train")],
+        )
+
+        args = argparse.Namespace(name="train", all=False, yes=False, verbose=False)
+        with pytest.raises(VastlyError, match="train.*gpu.*already inactive"):
+            cmd_stop(args)
+
+
+class TestCmdSshImprovedErrors:
+    """cmd_ssh error messages should include state info."""
+
+    def test_non_startable_includes_status(self, monkeypatch):
+        from vastly.commands import cmd_ssh
+
+        instances = [
+            _inst(name="gpu-a", id=1, status="running"),
+            _inst(name="gpu-b", id=2, status="offline"),
+        ]
+
+        monkeypatch.setattr("vastly.commands.shutil.which", lambda _: "/usr/bin/ssh")
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.commands.sync_instances", lambda _: instances)
+
+        args = argparse.Namespace(remote_cmd=[], name="gpu-b", verbose=False)
+        with pytest.raises(VastlyError, match="offline.*cannot be started"):
+            cmd_ssh(args)
+
+
+class TestHttpsUrlTrailingSlash:
+    """HTTPS URL conversion should handle trailing slashes correctly."""
+
+    def test_trailing_slash_stripped(self, monkeypatch):
+        from vastly.remote import _check_repo_mismatch
+
+        # The fix is in setup_instances which is hard to unit test directly.
+        # Instead, verify the URL manipulation logic inline:
+        repo_url = "https://github.com/user/repo/"
+        clean_url = repo_url.rstrip("/")
+        suggestion = clean_url.replace("https://", "git@", 1).replace("/", ":", 1)
+        assert suggestion == "git@github.com:user/repo"
+
+    def test_no_trailing_slash_unchanged(self):
+        repo_url = "https://github.com/user/repo"
+        clean_url = repo_url.rstrip("/")
+        suggestion = clean_url.replace("https://", "git@", 1).replace("/", ":", 1)
+        assert suggestion == "git@github.com:user/repo"

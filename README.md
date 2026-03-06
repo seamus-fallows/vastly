@@ -52,7 +52,6 @@ Key features:
 - **File transfer** -- `vst cp up .env` / `vst cp down results/` without remembering IPs
 - **SSH agent forwarding** -- private repo access works automatically with SSH remotes
 - **Per-project config** -- drop a `.vastly.json` in your repo root for project-specific settings
-- **Graceful fallback** -- if the Vast.ai API is unreachable, vastly falls back to cached SSH configs
 
 ## Commands
 

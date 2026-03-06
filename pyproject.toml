@@ -42,3 +42,4 @@ path = "src/vastly/__init__.py"
 packages = ["src/vastly"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]

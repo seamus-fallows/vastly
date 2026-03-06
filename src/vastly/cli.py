@@ -164,6 +164,8 @@ def _print_cmd_help(cmd: str, parsers: dict) -> None:
     # Derive arguments and options from the argparse parser
     pos_args: list[tuple[str, str]] = []
     opts: list[tuple[str, str]] = []
+    # _actions is private, but argparse has no public equivalent for
+    # enumerating a parser's actions with their option_strings and help text.
     for action in parsers[cmd]._actions:
         if action.dest in ("help", "verbose") or not action.help:
             continue
@@ -191,7 +193,7 @@ def _print_cmd_help(cmd: str, parsers: dict) -> None:
 # ── Argument parser ─────────────────────────────────────────────────
 
 
-def _build_parser() -> tuple[argparse.ArgumentParser, dict]:
+def _build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentParser]]:
     """Build and return (parser, {cmd_name: subparser})."""
     hint = "auto-selects if only one, prompts if multiple"
 
@@ -327,13 +329,15 @@ def main(argv: list[str] | None = None) -> None:
     # Argparse subparser defaults override top-level flags when both define
     # the same attribute. These flags are on both the top-level parser (for
     # bare `vst -f`) and the connect subparser, so we scan raw argv to
-    # ensure the top-level value isn't lost.
-    if "-f" in raw or "--force-setup" in raw:
-        args.force_setup = True
-    if "-n" in raw or "--no-setup" in raw:
-        args.no_setup = True
-    if "--all" in raw:
-        args.all = True
+    # ensure the top-level value isn't lost. Scoped to connect to avoid
+    # false matches in other commands' positional/remainder args.
+    if args.command == "connect":
+        if "-f" in raw or "--force-setup" in raw:
+            args.force_setup = True
+        if "-n" in raw or "--no-setup" in raw:
+            args.no_setup = True
+        if "--all" in raw:
+            args.all = True
 
     if args.verbose:
         vastly.VERBOSE = True

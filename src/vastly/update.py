@@ -55,6 +55,10 @@ def check_for_update() -> None:
 
         latest = data["info"]["version"]
 
+        # Skip pre-release versions (e.g. "0.4.0a1")
+        if not all(c.isdigit() or c == "." for c in latest):
+            return
+
         # Update cache timestamp regardless of whether update is available
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         _CACHE_FILE.write_text(str(time.time()), encoding="utf-8")
@@ -66,5 +70,6 @@ def check_for_update() -> None:
                     "Update: pip install -U vastly"
                 )
             )
-    except Exception:
-        pass
+    except Exception as e:
+        import vastly
+        vastly.verbose(f"Update check failed: {e}")

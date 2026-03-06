@@ -48,6 +48,14 @@ DEFAULTS = {
 }
 
 _STRING_KEYS = {"ide", "sshUser", "workspace", "gitRemote"}
+
+
+def _ensure_list(config: dict, key: str) -> None:
+    """Coerce a single string value to a one-element list."""
+    if isinstance(config.get(key), str):
+        config[key] = [config[key]]
+
+
 _PROJECT_KEYS = {
     "postInstall",
     "installCommand",
@@ -126,7 +134,7 @@ def _validate_config(config: Config) -> None:
         )
 
     # sshKeyPath: None or non-empty string
-    ssh_key_path = config.get("sshKeyPath")
+    ssh_key_path = config["sshKeyPath"]
     if ssh_key_path is not None and (not isinstance(ssh_key_path, str) or not ssh_key_path):
         raise ConfigError(
             f"Invalid config: 'sshKeyPath' must be None or a non-empty string, "
@@ -134,7 +142,7 @@ def _validate_config(config: Config) -> None:
         )
 
     # disableAutoTmux: bool
-    disable_tmux = config.get("disableAutoTmux")
+    disable_tmux = config["disableAutoTmux"]
     if not isinstance(disable_tmux, bool):
         raise ConfigError(
             f"Invalid config: 'disableAutoTmux' must be a bool, "
@@ -142,7 +150,7 @@ def _validate_config(config: Config) -> None:
         )
 
     # installCommand: None or non-empty string
-    install_cmd = config.get("installCommand")
+    install_cmd = config["installCommand"]
     if install_cmd is not None and (not isinstance(install_cmd, str) or not install_cmd):
         raise ConfigError(
             f"Invalid config: 'installCommand' must be None or a non-empty string, "
@@ -150,7 +158,7 @@ def _validate_config(config: Config) -> None:
         )
 
     # portForwards: list of dicts with int local and int remote
-    port_forwards = config.get("portForwards")
+    port_forwards = config["portForwards"]
     if not isinstance(port_forwards, list):
         raise ConfigError(
             f"Invalid config: 'portForwards' must be a list of {{local, remote}} objects, "
@@ -179,7 +187,7 @@ def _validate_config(config: Config) -> None:
 
     # postInstall, copyFiles: list of strings
     for key in ("postInstall", "copyFiles"):
-        val = config.get(key)
+        val = config[key]
         if not isinstance(val, list):
             raise ConfigError(
                 f"Invalid config: '{key}' must be a list of strings, "
@@ -198,7 +206,7 @@ def _warn_unknown_keys(raw: dict[str, Any], source: str) -> None:
     unknown = set(raw) - _KNOWN_KEYS
     if unknown:
         keys = ", ".join(sorted(unknown))
-        print(yellow(f"Warning: unknown config keys in {source}: {keys}"))
+        print(yellow(f"Warning: unknown config keys in {source}: {keys}"), file=sys.stderr)
 
 
 def ensure_config(path: Path | None = None) -> bool:
@@ -239,6 +247,8 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
         user_val = raw.get(k)
         if user_val is None or (k in _STRING_KEYS and user_val == ""):
             config[k] = v
+        elif k == "sshKeyPath" and user_val == "":
+            config[k] = None
         else:
             config[k] = user_val
 
@@ -248,8 +258,7 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
         vastly.verbose(f"IDE detected from environment: {env_ide}")
         config["ide"] = env_ide
 
-    if isinstance(config["postInstall"], str):
-        config["postInstall"] = [config["postInstall"]]
+    _ensure_list(config, "postInstall")
 
     # Overlay per-project config (only project-specific keys)
     # TODO: consider merging global + project postInstall instead of replacing,
@@ -265,6 +274,8 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
                     "Fix the project config or remove it."
                 ) from e
 
+            _warn_unknown_keys(project_raw, str(project_cfg))
+
             for k, v in project_raw.items():
                 if k not in _PROJECT_KEYS:
                     continue
@@ -272,8 +283,7 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
                     continue
                 config[k] = v
 
-            if isinstance(config["postInstall"], str):
-                config["postInstall"] = [config["postInstall"]]
+            _ensure_list(config, "postInstall")
 
             vastly.verbose(f"Project config overlaid from {project_cfg}")
 

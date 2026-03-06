@@ -153,7 +153,7 @@ INSTALL_METHOD="none"
 run_install() {
     local cmd="$1"
     log "Running: ${cmd}"
-    eval "$cmd"
+    bash -c "$cmd"
     INSTALL_METHOD="$cmd"
 }
 
@@ -191,7 +191,7 @@ if [[ ${#POST_INSTALL_COMMANDS[@]} -gt 0 ]]; then
     for cmd in "${POST_INSTALL_COMMANDS[@]}"; do
         [[ -z "$cmd" ]] && continue
         log "Post-install: ${cmd}"
-        eval "$cmd" || warn "Post-install command failed: ${cmd}"
+        bash -c "$cmd" || warn "Post-install command failed: ${cmd}"
     done
 fi
 
