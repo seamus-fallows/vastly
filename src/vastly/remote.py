@@ -61,7 +61,8 @@ def setup_instances(
 
     for inst in instances:
         name = inst.name
-        print(f"  {name}: ", end="", flush=True)
+        label = inst.display_name
+        print(f"  {label}: ", end="", flush=True)
 
         # Combined reachability + marker + listing probe in a single SSH connection.
         # Reads the current repo's marker and lists all markers for mismatch detection.
@@ -131,7 +132,7 @@ def setup_instances(
             except (EOFError, KeyboardInterrupt):
                 answer = ""
             if answer != "y":
-                print(f"  {name}: skipped.")
+                print(f"  {label}: skipped.")
                 continue
 
         # Warn about HTTPS limitation (once)
@@ -176,7 +177,7 @@ def setup_instances(
             str(setup_script), f"{name}:/tmp/_vastly-setup.sh", setup=True
         )
         if scp_result.returncode != 0:
-            print(red(f"  {name}: failed to copy setup script"))
+            print(red(f"  {label}: failed to copy setup script"))
             continue
 
         setup_args = [
@@ -201,7 +202,7 @@ def setup_instances(
         result = run_ssh(name, remote_cmd, setup=True, stream=True)
 
         if result.returncode != 0:
-            print(red(f"  {name}: setup failed (exit {result.returncode})"))
+            print(red(f"  {label}: setup failed (exit {result.returncode})"))
             continue
 
         # Copy non-git-tracked files to the remote instance
@@ -213,12 +214,12 @@ def setup_instances(
                 if not local_path.exists():
                     print(
                         yellow(
-                            f"  {name}: copyFiles: {rel_path} not found locally, skipping"
+                            f"  {label}: copyFiles: {rel_path} not found locally, skipping"
                         )
                     )
                     continue
                 remote_dest = f"{name}:{remote_base}/{rel_path}"
-                print(cyan(f"  {name}: copying {rel_path}"))
+                print(cyan(f"  {label}: copying {rel_path}"))
                 # Ensure parent directory exists on remote (use PurePosixPath
                 # so we get forward slashes even when running on Windows)
                 parent_rel = str(PurePosixPath(rel_path).parent)
@@ -232,9 +233,9 @@ def setup_instances(
                     recursive=local_path.is_dir(),
                 )
                 if cp.returncode != 0:
-                    print(yellow(f"  {name}: failed to copy {rel_path}"))
+                    print(yellow(f"  {label}: failed to copy {rel_path}"))
 
-        print(green(f"  {name}: done."))
+        print(green(f"  {label}: done."))
         success_names.append(name)
 
     # Summary line for partial success
