@@ -258,6 +258,95 @@ class TestSetupRemoteScript:
         assert "set -euo pipefail" in content
 
 
+# ── TestVscodeSettingsMerge ─────────────────────────────────────────
+
+
+def _merge_vscode_settings(vscode_dir: Path, python_path: str) -> None:
+    """Replicate the Python merge logic from setup-remote.sh for testing.
+
+    This must stay in sync with the inline python3 -c snippet in Step 9.
+    """
+    import json as _json
+
+    p = vscode_dir / "settings.json"
+    settings = {}
+    if p.exists():
+        try:
+            settings = _json.loads(p.read_text())
+        except (_json.JSONDecodeError, OSError):
+            return  # JSONC or unreadable -- leave it alone
+    settings["python.defaultInterpreterPath"] = python_path
+    settings["terminal.integrated.defaultProfile.linux"] = "bash (login)"
+    settings["terminal.integrated.profiles.linux"] = {
+        "bash (login)": {"path": "/bin/bash", "args": ["-l"]}
+    }
+    p.write_text(_json.dumps(settings, indent=4) + "\n")
+
+
+class TestVscodeSettingsMerge:
+    """Test the .vscode/settings.json merge logic from setup-remote.sh."""
+
+    def test_creates_fresh_when_no_file(self, tmp_path):
+        vscode = tmp_path / ".vscode"
+        vscode.mkdir()
+        _merge_vscode_settings(vscode, "/usr/bin/python3")
+        result = json.loads((vscode / "settings.json").read_text())
+        assert result["python.defaultInterpreterPath"] == "/usr/bin/python3"
+        assert result["terminal.integrated.defaultProfile.linux"] == "bash (login)"
+
+    def test_preserves_existing_keys(self, tmp_path):
+        vscode = tmp_path / ".vscode"
+        vscode.mkdir()
+        existing = {
+            "editor.fontSize": 14,
+            "python.linting.enabled": True,
+            "[python]": {"editor.formatOnSave": True},
+        }
+        (vscode / "settings.json").write_text(json.dumps(existing))
+        _merge_vscode_settings(vscode, "/venv/main/bin/python")
+        result = json.loads((vscode / "settings.json").read_text())
+        # Our keys are set
+        assert result["python.defaultInterpreterPath"] == "/venv/main/bin/python"
+        # Existing keys are preserved
+        assert result["editor.fontSize"] == 14
+        assert result["python.linting.enabled"] is True
+        assert result["[python]"] == {"editor.formatOnSave": True}
+
+    def test_overwrites_conflicting_keys(self, tmp_path):
+        vscode = tmp_path / ".vscode"
+        vscode.mkdir()
+        existing = {"python.defaultInterpreterPath": "/old/python"}
+        (vscode / "settings.json").write_text(json.dumps(existing))
+        _merge_vscode_settings(vscode, "/new/python")
+        result = json.loads((vscode / "settings.json").read_text())
+        assert result["python.defaultInterpreterPath"] == "/new/python"
+
+    def test_leaves_jsonc_untouched(self, tmp_path):
+        vscode = tmp_path / ".vscode"
+        vscode.mkdir()
+        jsonc_content = '{\n  // User comment\n  "editor.fontSize": 14\n}'
+        (vscode / "settings.json").write_text(jsonc_content)
+        _merge_vscode_settings(vscode, "/usr/bin/python3")
+        # File should be unchanged -- merge bailed out
+        assert (vscode / "settings.json").read_text() == jsonc_content
+
+    def test_leaves_malformed_json_untouched(self, tmp_path):
+        vscode = tmp_path / ".vscode"
+        vscode.mkdir()
+        bad_content = "{not valid json"
+        (vscode / "settings.json").write_text(bad_content)
+        _merge_vscode_settings(vscode, "/usr/bin/python3")
+        assert (vscode / "settings.json").read_text() == bad_content
+
+    def test_script_contains_merge_not_overwrite(self):
+        """Verify setup-remote.sh uses the Python merge, not cat >."""
+        content = (DATA / "setup-remote.sh").read_text(encoding="utf-8")
+        assert "python3 -c" in content
+        assert "json.loads" in content
+        # Should NOT contain the old cat overwrite pattern
+        assert "cat > .vscode/settings.json" not in content
+
+
 # ── TestSetupMarker ──────────────────────────────────────────────────
 
 

@@ -204,20 +204,24 @@ if [[ -x /venv/main/bin/python ]]; then
 fi
 [[ -z "$VSCODE_PYTHON" ]] && VSCODE_PYTHON="/usr/bin/python3"
 
-log "Writing .vscode/settings.json (python: ${VSCODE_PYTHON})"
+log "Merging .vscode/settings.json (python: ${VSCODE_PYTHON})"
 mkdir -p .vscode
-cat > .vscode/settings.json << VSCEOF
-{
-    "python.defaultInterpreterPath": "${VSCODE_PYTHON}",
-    "terminal.integrated.defaultProfile.linux": "bash (login)",
-    "terminal.integrated.profiles.linux": {
-        "bash (login)": {
-            "path": "/bin/bash",
-            "args": ["-l"]
-        }
-    }
+python3 -c "
+import json, os, sys
+p = '.vscode/settings.json'
+settings = {}
+if os.path.exists(p):
+    try:
+        settings = json.loads(open(p).read())
+    except (json.JSONDecodeError, OSError):
+        sys.exit(0)  # JSONC or unreadable -- leave it alone
+settings['python.defaultInterpreterPath'] = sys.argv[1]
+settings['terminal.integrated.defaultProfile.linux'] = 'bash (login)'
+settings['terminal.integrated.profiles.linux'] = {
+    'bash (login)': {'path': '/bin/bash', 'args': ['-l']}
 }
-VSCEOF
+open(p, 'w').write(json.dumps(settings, indent=4) + '\n')
+" "$VSCODE_PYTHON"
 
 # ── Step 10: Patch .bashrc ──────────────────────────────────────────────
 
