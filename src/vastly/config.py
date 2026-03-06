@@ -47,7 +47,7 @@ DEFAULTS = {
     "copyFiles": [],
 }
 
-_STRING_KEYS = {"ide", "sshUser", "workspace", "gitRemote"}
+_STRING_KEYS = frozenset({"ide", "sshUser", "workspace", "gitRemote"})
 
 
 def _ensure_list(config: dict, key: str) -> None:
@@ -56,14 +56,14 @@ def _ensure_list(config: dict, key: str) -> None:
         config[key] = [config[key]]
 
 
-_PROJECT_KEYS = {
+_PROJECT_KEYS = frozenset({
     "postInstall",
     "installCommand",
     "workspace",
     "portForwards",
     "copyFiles",
     "gitRemote",
-}
+})
 
 
 def _ide_from_env() -> str | None:
@@ -109,7 +109,7 @@ def _detect_ide() -> str:
     return "code"
 
 
-_KNOWN_KEYS = set(DEFAULTS)
+_KNOWN_KEYS = frozenset(DEFAULTS)
 
 
 def _validate_config(config: Config) -> None:

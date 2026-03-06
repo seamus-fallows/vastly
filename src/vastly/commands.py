@@ -35,7 +35,7 @@ from vastly.instance import (
     validate_alias,
 )
 from vastly.remote import setup_instances
-from vastly.ssh import SSH_CONFIG_DIR, SSH_OPTS
+from vastly.ssh import SSH_CONFIG_DIR, SSH_OPTS, run_scp, run_ssh
 
 
 def _git_root() -> Path | None:
@@ -534,7 +534,6 @@ def _copy_one(
     git_root: Path,
 ) -> bool:
     """Copy a single file/directory. Returns True on success."""
-    from vastly.ssh import run_scp, run_ssh
 
     rel_path = raw_path.rstrip("/\\")
     remote_path = f"{remote_base}/{rel_path}"

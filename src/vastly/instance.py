@@ -42,7 +42,7 @@ class Instance:
 _ALIASES_FILE = Path.home() / ".vastly" / "aliases.json"
 
 # Reserved names that cannot be used as aliases
-_RESERVED_NAMES = {
+_RESERVED_NAMES = frozenset({
     "connect",
     "stop",
     "destroy",
@@ -52,7 +52,7 @@ _RESERVED_NAMES = {
     "start",
     "config",
     "ssh",
-}
+})
 
 # Instance lifecycle state classifications
 STOPPED_STATES = {"stopped", "exited"}

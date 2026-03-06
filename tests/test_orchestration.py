@@ -13,19 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from conftest import make_test_instance as _inst
-from vastly.config import DEFAULTS
+from conftest import make_test_config, make_test_instance as _inst
 from vastly.errors import VastlyError
 
 
-def _config(**kwargs) -> dict:
-    """Create a complete config dict with sensible defaults for testing."""
-    base = {**DEFAULTS}
-    base.update(kwargs)
-    return base
-
-
-_MINIMAL_CONFIG = _config(portForwards=[])
+_MINIMAL_CONFIG = make_test_config(portForwards=[])
 
 
 # ---------------------------------------------------------------------------
