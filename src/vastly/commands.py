@@ -617,7 +617,7 @@ def cmd_cp(args: argparse.Namespace) -> None:
             raise VastlyError("--config is only supported for uploads (vst cp up -c).")
         copy_files = config["copyFiles"]
         if not copy_files:
-            print(yellow("  No copyFiles configured in .vastly.json"))
+            print(yellow("  No copyFiles configured. See 'vst config' for details."))
         else:
             # Prepend config entries, then any extra CLI paths
             paths = copy_files + [p for p in paths if p not in copy_files]
@@ -761,7 +761,7 @@ def cmd_config(args: argparse.Namespace) -> None:
     # Tips
     print(f"\n{cyan('tips:')}")
     tips = [
-        ("Edit ~/.vastly.json to customize", "'vastly' and 'vst' are the same command"),
+        ("Edit ~/.vastly/config.json to customize", "'vastly' and 'vst' are the same command"),
         ("Add .vastly.json to any repo", "vst -v for debug output"),
         ("vst -f to re-run setup", "https://github.com/seamus-fallows/vastly"),
     ]

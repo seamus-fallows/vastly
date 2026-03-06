@@ -32,7 +32,8 @@ class Config(TypedDict):
     installCommand: str | None
     copyFiles: list[str]
 
-CONFIG_PATH = Path.home() / ".vastly.json"
+CONFIG_DIR = Path.home() / ".vastly"
+CONFIG_PATH = CONFIG_DIR / "config.json"
 
 DEFAULTS = {
     "ide": "code",
@@ -217,6 +218,7 @@ def ensure_config(path: Path | None = None) -> bool:
     template = resources.files("vastly.data").joinpath(".vastly.template.json")
     config_data = json.loads(template.read_text(encoding="utf-8"))
     config_data["ide"] = _detect_ide()
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config_data, indent=2) + "\n", encoding="utf-8")
     return True
 

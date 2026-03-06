@@ -306,7 +306,7 @@ def main(argv: list[str] | None = None) -> None:
         print(dim("  \u250c Created ") + str(CONFIG_PATH))
         print(dim("  \u2502 Run 'vst' from a git repo to connect to your Vast.ai instance."))
         print(dim("  \u2502 Run 'vst -h' for all commands."))
-        print(dim("  \u2514 Edit ~/.vastly.json to customize.\n"))
+        print(dim("  \u2514 Edit ~/.vastly/config.json to customize.\n"))
 
     parser, parsers = _build_parser()
 
