@@ -263,7 +263,11 @@ fi
 # Remove old vastly lines from .bash_profile too, then re-add if needed
 touch ~/.bash_profile
 sed -i "/${BASHRC_MARKER}/d" ~/.bash_profile
-if ! grep -q '\.bashrc' ~/.bash_profile 2>/dev/null; then
+# Only add .bashrc sourcing if nothing else already does it.
+# Ubuntu's /etc/profile sources ~/.bashrc for interactive login shells,
+# so adding another source line to .bash_profile causes double-sourcing.
+if ! grep -q '\.bashrc' ~/.bash_profile 2>/dev/null && \
+   ! grep -q '\.bashrc' /etc/profile 2>/dev/null; then
     log "Adding .bashrc source to .bash_profile"
     echo "[ -f ~/.bashrc ] && . ~/.bashrc ${BASHRC_MARKER}" >> ~/.bash_profile
 fi
