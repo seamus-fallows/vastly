@@ -393,6 +393,22 @@ def _do_connect(
     for inst in failed:
         print(yellow(f"  Skipping {inst.display_name} (setup failed)"))
 
+    # If all instances failed setup, offer to start a stopped one instead
+    if not success_names and failed:
+        startable = [i for i in all_instances if i.status in STARTABLE_STATES]
+        if startable:
+            print()
+            show_table(startable)
+            try:
+                to_start = select_instance(
+                    startable, prompt="Start a different instance?",
+                )
+            except VastlyError:
+                return
+            _start_and_resync(to_start, config)
+            _do_connect(name=to_start[0].alias or to_start[0].name)
+            return
+
     # Only check for updates after successful connect
     from vastly.update import check_for_update
 
