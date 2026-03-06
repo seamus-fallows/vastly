@@ -3567,27 +3567,27 @@ class TestFindByName:
 
         instances = [_inst(name="gpu-a", id=1), _inst(name="gpu-b", id=2)]
         result = find_by_name(instances, "gpu-a")
-        assert len(result) == 1
-        assert result[0].name == "gpu-a"
+        assert result is not None
+        assert result.name == "gpu-a"
 
     def test_match_by_alias(self):
         from vastly.instance import find_by_name
 
         instances = [_inst(name="gpu-a", id=1, alias="train")]
         result = find_by_name(instances, "train")
-        assert len(result) == 1
-        assert result[0].alias == "train"
+        assert result is not None
+        assert result.alias == "train"
 
-    def test_no_match_returns_empty(self):
+    def test_no_match_returns_none(self):
         from vastly.instance import find_by_name
 
         instances = [_inst(name="gpu-a", id=1)]
-        assert find_by_name(instances, "nonexistent") == []
+        assert find_by_name(instances, "nonexistent") is None
 
-    def test_empty_list_returns_empty(self):
+    def test_empty_list_returns_none(self):
         from vastly.instance import find_by_name
 
-        assert find_by_name([], "anything") == []
+        assert find_by_name([], "anything") is None
 
 
 class TestGpuNameSanitization:

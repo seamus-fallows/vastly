@@ -77,6 +77,7 @@ class TestSetupInstances:
             "disableAutoTmux": True,
             "installCommand": None,
             "postInstall": [],
+            "copyFiles": [],
         }
 
     def test_successful_setup(self, monkeypatch):

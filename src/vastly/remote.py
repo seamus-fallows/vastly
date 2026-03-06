@@ -44,20 +44,12 @@ def setup_instances(
     project_dir: Path | None = None,
 ) -> list[str]:
     """Run remote setup on each instance. Returns list of successful host names."""
-    git_name = subprocess.run(
-        ["git", "config", "--global", "user.name"],
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    git_email = subprocess.run(
-        ["git", "config", "--global", "user.email"],
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    git_name = None
+    git_email = None
 
     setup_script = Path(str(resources.files("vastly.data").joinpath("setup-remote.sh")))
     if not setup_script.exists():
-        print(red(f"Setup script not found at {setup_script}"))
+        print(red("Setup script not found. If installed from a zip, try: pip install vastly"))
         return []
 
     install_cmd = config["installCommand"] or "auto"
@@ -145,7 +137,8 @@ def setup_instances(
         # Warn about HTTPS limitation (once)
         if not https_warned and repo_url.startswith("https://"):
             https_warned = True
-            suggestion = repo_url.replace("https://", "git@", 1).replace("/", ":", 1)
+            clean_url = repo_url.rstrip("/")
+            suggestion = clean_url.replace("https://", "git@", 1).replace("/", ":", 1)
             fix_url = suggestion if suggestion.endswith(".git") else suggestion + ".git"
             print(
                 yellow(
@@ -154,6 +147,19 @@ def setup_instances(
                     f"    git remote set-url {config['gitRemote']} {fix_url}\n"
                 )
             )
+
+        # Fetch git identity lazily -- only when setup is actually needed
+        if git_name is None:
+            git_name = subprocess.run(
+                ["git", "config", "--global", "user.name"],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            git_email = subprocess.run(
+                ["git", "config", "--global", "user.email"],
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
 
         # Setup is needed -- git identity required
         if not git_name or not git_email:
@@ -186,6 +192,7 @@ def setup_instances(
 
         quoted = " ".join(shlex.quote(a) for a in setup_args)
         remote_cmd = (
+            # SCP from Windows preserves CRLF; strip carriage returns for bash
             "sed -i 's/\\r$//' /tmp/_vastly-setup.sh && "
             f"bash /tmp/_vastly-setup.sh {quoted}; "
             "e=$?; rm -f /tmp/_vastly-setup.sh; exit $e"
@@ -198,7 +205,7 @@ def setup_instances(
             continue
 
         # Copy non-git-tracked files to the remote instance
-        copy_files = config.get("copyFiles", [])
+        copy_files = config["copyFiles"]
         if copy_files and project_dir:
             remote_base = f"{config['workspace']}/{repo_name}"
             for rel_path in copy_files:

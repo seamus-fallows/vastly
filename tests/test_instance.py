@@ -80,7 +80,7 @@ class TestSyncInstances:
     def _mock_deps(self, monkeypatch, ssh_config_dir):
         """Mock the external deps that touch the filesystem or network."""
         monkeypatch.setattr("vastly.instance.ensure_ssh_include", lambda: None)
-        monkeypatch.setattr("vastly.instance.clear_ssh_configs", lambda: None)
+        monkeypatch.setattr("vastly.instance.prune_ssh_configs", lambda keep: None)
         monkeypatch.setattr("vastly.instance.write_ssh_config", lambda *a, **kw: None)
 
     def test_syncs_running_instances(self, monkeypatch, make_instance, make_config):
@@ -91,7 +91,6 @@ class TestSyncInstances:
         running = [i for i in result if i.status == "running"]
         assert len(running) == 1
         assert running[0].name == "1xRTX4090-US"
-        assert running[0].cached is False
 
     def test_returns_all_instances_including_non_running(
         self, monkeypatch, make_instance, make_config
@@ -108,18 +107,18 @@ class TestSyncInstances:
         running = [i for i in result if i.status == "running"]
         assert len(running) == 1
 
-    def test_skips_running_instance_without_port_22(
+    def test_running_without_port_22_uses_actual_status(
         self, monkeypatch, make_instance, make_config
     ):
         monkeypatch.setattr(
             "vastly.instance.fetch_instances",
-            lambda: [make_instance(ports={})],
+            lambda: [make_instance(ports={}, actual_status="loading")],
         )
         result = sync_instances(make_config())
-        # Running instance without port 22 is skipped entirely
-        assert result == []
+        assert len(result) == 1
+        assert result[0].status == "loading"
 
-    def test_skips_running_instance_with_malformed_ports(
+    def test_running_with_malformed_ports_uses_actual_status(
         self, monkeypatch, make_instance, make_config
     ):
         monkeypatch.setattr(
@@ -127,30 +126,14 @@ class TestSyncInstances:
             lambda: [make_instance(ports={"22/tcp": []})],  # empty list
         )
         result = sync_instances(make_config())
-        assert result == []
-
-    def test_falls_back_to_cache_when_api_fails(
-        self, monkeypatch, make_config, ssh_config_dir
-    ):
-        def raise_api_error():
-            raise APIError("timeout")
-
-        monkeypatch.setattr("vastly.instance.fetch_instances", raise_api_error)
-        monkeypatch.setattr(
-            "vastly.instance.cached_config_names",
-            lambda: ["1xRTX4090-US"],
-        )
-        result = sync_instances(make_config())
         assert len(result) == 1
-        assert result[0].cached is True
-        assert result[0].name == "1xRTX4090-US"
+        assert result[0].status == "loading"  # default when actual_status missing
 
-    def test_raises_when_api_fails_and_no_cache(self, monkeypatch, make_config):
+    def test_raises_when_api_fails(self, monkeypatch, make_config):
         def raise_api_error():
             raise APIError("timeout")
 
         monkeypatch.setattr("vastly.instance.fetch_instances", raise_api_error)
-        monkeypatch.setattr("vastly.instance.cached_config_names", lambda: [])
         with pytest.raises(APIError):
             sync_instances(make_config())
 
@@ -231,17 +214,17 @@ class TestShowTable:
         assert "1xRTX4090-US" in out
         assert "$0.55/hr" in out
 
-    def test_cached_instance_format(self, capsys):
-        instances = [_inst(name="1xRTX4090-US", cached=True, dph_total=0)]
+    def test_stopped_instance_format(self, capsys):
+        instances = [_inst(name="1xRTX4090-US", status="stopped", dph_total=0.25)]
         show_table(instances)
         out = capsys.readouterr().out
         assert "1xRTX4090-US" in out
-        assert "(cached)" in out
+        assert "inactive" in out
 
     def test_multiple_instances(self, capsys):
         instances = [
             _inst(name="gpu-1", dph_total=0.50),
-            _inst(name="gpu-2", id=2, cached=True, dph_total=0),
+            _inst(name="gpu-2", inst_id=2, status="stopped", dph_total=0),
         ]
         show_table(instances)
         out = capsys.readouterr().out

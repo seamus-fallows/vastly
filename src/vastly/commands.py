@@ -19,10 +19,12 @@ from vastly.config import CONFIG_PATH, Config, _PROJECT_KEYS, load_config
 from vastly.errors import VastlyError
 from vastly.ide import check_ide, open_ide
 from vastly.instance import (
+    STARTABLE_STATES,
     STOPPED_STATES,
     STOPPABLE_STATES,
     TRANSITIONAL_STATES,
     Instance,
+    find_by_name,
     get_running_instances,
     get_synced_instances,
     load_aliases,
@@ -125,10 +127,28 @@ def _vastai_action(action: str, inst: Instance) -> None:
         msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise VastlyError(f"Failed to {action} {inst.display_name}: {msg}")
 
-    action_past = {"stop": "Stopped", "destroy": "Destroyed", "start": "Started"}[
-        action
-    ]
+    action_past = {"stop": "Stopped", "destroy": "Destroyed"}[action]
     print(green(f"  {action_past} {inst.display_name}"))
+
+
+def _vastai_start(inst: Instance) -> bool:
+    """Start an instance. Returns True if the start was queued (resources unavailable)."""
+    result = subprocess.run(
+        ["vastai", "start", "instance", str(inst.id)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise VastlyError(f"Failed to start {inst.display_name}: {msg}")
+
+    output = (result.stdout + result.stderr).lower()
+    queued = "queued" in output or "unavailable" in output
+    if queued:
+        print(yellow(f"  Queued {inst.display_name} (waiting for resources)"))
+    else:
+        print(green(f"  Started {inst.display_name}"))
+    return queued
 
 
 def _vastai_destroy(inst: Instance) -> None:
@@ -153,20 +173,31 @@ def _vastai_destroy(inst: Instance) -> None:
 
 _START_TIMEOUT = 300  # 5 minutes
 _START_POLL_INTERVAL = 5
+_MAX_POLL_FAILURES = 5
 
 
 def _start_and_resync(
     to_start: list[Instance], config: Config
 ) -> tuple[list[Instance], list[Instance]]:
-    """Start instances, wait for readiness, re-sync SSH configs.
+    """Start or wait for instances, then re-sync SSH configs.
+
+    Stopped/exited instances are started. Transitional instances (loading,
+    creating, etc.) are waited on without issuing a redundant start call.
 
     Returns (all_instances, running_instances) after re-sync.
     Raises VastlyError if no instances are running after re-sync.
     """
+    queued_ids: set[int] = set()
     for inst in to_start:
-        _vastai_action("start", inst)
+        if inst.status in TRANSITIONAL_STATES:
+            print(dim(f"  {inst.display_name} is already starting, waiting..."))
+        else:
+            if _vastai_start(inst):
+                queued_ids.add(inst.id)
     for inst in to_start:
-        _poll_for_running(str(inst.id), inst.display_name)
+        _poll_for_running(
+            str(inst.id), inst.display_name, queued=inst.id in queued_ids
+        )
 
     all_instances = sync_instances(config)
     running = [i for i in all_instances if i.status == "running"]
@@ -177,14 +208,21 @@ def _start_and_resync(
     return all_instances, running
 
 
-def _poll_for_running(inst_id: str, display_name: str = "") -> None:
-    """Poll the Vast.ai API until instance is running, or raise on timeout."""
+def _poll_for_running(
+    inst_id: str, display_name: str = "", *, queued: bool = False
+) -> None:
+    """Poll the Vast.ai API until instance is running, or raise on timeout.
 
+    When *queued* is True (the start response said resources are unavailable),
+    the timeout is suspended -- queued starts can take hours and the user can
+    Ctrl+C. The timeout resumes once the instance leaves the stopped state.
+    """
     label = display_name or inst_id
     deadline = time.monotonic() + _START_TIMEOUT
     last_status = "unknown"
+    api_failures = 0
 
-    while time.monotonic() < deadline:
+    while queued or time.monotonic() < deadline:
         time.sleep(_START_POLL_INTERVAL)
 
         result = subprocess.run(
@@ -193,26 +231,49 @@ def _poll_for_running(inst_id: str, display_name: str = "") -> None:
             text=True,
         )
         if result.returncode != 0:
+            api_failures += 1
+            if api_failures >= _MAX_POLL_FAILURES:
+                msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
+                raise VastlyError(
+                    f"Cannot reach Vast.ai API while waiting for {label}: {msg}"
+                )
             continue
 
         try:
             data = json.loads(result.stdout)
         except (json.JSONDecodeError, TypeError):
+            api_failures += 1
+            if api_failures >= _MAX_POLL_FAILURES:
+                raise VastlyError(
+                    f"Vast.ai API returning invalid data while waiting for {label}."
+                )
             continue
+
+        api_failures = 0
 
         cur_state = data.get("cur_state", "unknown")
         if cur_state == "running":
-            print(green(f"  {label} is running."))
-            return
+            actual = data.get("actual_status")
+            if actual is None or actual == "running":
+                print(green(f"  {label} is running."))
+                return
+            # cur_state says running but container isn't ready yet
+            cur_state = actual
+
+        # Once a queued instance leaves "stopped", it's actively starting --
+        # resume the normal timeout from this point.
+        if queued and cur_state not in STOPPED_STATES:
+            queued = False
+            deadline = time.monotonic() + _START_TIMEOUT
 
         if cur_state != last_status:
             last_status = cur_state
             hint = (
-                " (Ctrl+C to cancel -- scheduling can take a while)"
-                if cur_state == "scheduling"
+                " (Ctrl+C to cancel -- this can take a while)"
+                if queued
                 else ""
             )
-            print(dim(f"  {label}: waiting... ({cur_state}){hint}"))
+            print(dim(f"  {label}: waiting...{hint}"))
 
     raise VastlyError(
         f"Timed out waiting for {label} to start. "
@@ -223,8 +284,14 @@ def _poll_for_running(inst_id: str, display_name: str = "") -> None:
 # ── Subcommand handlers ────────────────────────────────────────────
 
 
-def cmd_connect(args: argparse.Namespace) -> None:
-    """Connect flow -- sync instances, check setup, run setup if needed, open IDE."""
+def _do_connect(
+    *,
+    name: str | None = None,
+    select_all: bool = False,
+    no_setup: bool = False,
+    force_setup: bool = False,
+) -> None:
+    """Core connect flow: sync instances, run setup, open IDE."""
     git_root = _git_root()
     config = load_config(project_dir=git_root)
 
@@ -234,29 +301,25 @@ def cmd_connect(args: argparse.Namespace) -> None:
     running = [i for i in all_instances if i.status == "running"]
 
     if not running:
-        # Auto-start stopped instance(s) instead of erroring
-        startable = [i for i in all_instances if i.status in STOPPED_STATES]
+        # Include both stopped and transitional (loading, creating, etc.)
+        startable = [
+            i for i in all_instances
+            if i.status in STARTABLE_STATES
+        ]
 
-        if args.name:
-            match = [
-                i for i in startable if i.name == args.name or i.alias == args.name
-            ]
+        if name:
+            match = find_by_name(startable, name)
             if match:
-                to_start = [match[0]]
+                to_start = [match]
             else:
-                match_all = [
-                    i
-                    for i in all_instances
-                    if i.name == args.name or i.alias == args.name
-                ]
-                if match_all:
+                if find_by_name(all_instances, name):
                     raise VastlyError(
-                        f"'{args.name}' is {match_all[0].status} and cannot be started."
+                        f"'{name}' is inactive and cannot be started."
                     )
-                raise VastlyError(f"No instance named '{args.name}'.")
+                raise VastlyError(f"No instance named '{name}'.")
         elif not startable:
             raise VastlyError("No Vast instances found.")
-        elif args.all:
+        elif select_all:
             print(yellow(f"  No running instances. Starting all {len(startable)}..."))
             to_start = startable
         elif len(startable) == 1:
@@ -276,35 +339,29 @@ def cmd_connect(args: argparse.Namespace) -> None:
     show_table(running)
 
     # If the user named a non-running instance, give a specific error
-    if args.name:
-        match_running = [
-            i for i in running if i.name == args.name or i.alias == args.name
-        ]
-        if not match_running:
-            match_all = [
-                i for i in all_instances if i.name == args.name or i.alias == args.name
-            ]
-            if match_all:
+    if name:
+        if not find_by_name(running, name):
+            if find_by_name(all_instances, name):
                 raise VastlyError(
-                    f"'{args.name}' is {match_all[0].status}. Use 'vst start {args.name}' to start it."
+                    f"'{name}' is inactive. Use 'vst start {name}' to start it."
                 )
 
-    if args.all:
+    if select_all:
         selected = running
     else:
-        selected = select_instance(running, args.name, allow_all=True)
+        selected = select_instance(running, name, allow_all=True)
     vastly.verbose(f"Selected {len(selected)} instance(s) for connect")
 
     repo_info = _local_repo_info(config["gitRemote"])
 
-    if args.no_setup or not repo_info:
+    if no_setup or not repo_info:
         vastly.verbose("Skipping setup (--no-setup or not in a git repo)")
         if repo_info:
             _, repo_name = repo_info
             open_path = f"{config['workspace']}/{repo_name}"
         else:
             open_path = config["workspace"]
-            if not args.no_setup:
+            if not no_setup:
                 print(
                     yellow(
                         "  Not in a git repo -- run vst from a git repo to auto-setup."
@@ -324,7 +381,7 @@ def cmd_connect(args: argparse.Namespace) -> None:
         repo_url,
         repo_name,
         config,
-        force_setup=args.force_setup,
+        force_setup=force_setup,
         project_dir=git_root,
     )
     display_names = {inst.name: inst.display_name for inst in selected}
@@ -336,6 +393,16 @@ def cmd_connect(args: argparse.Namespace) -> None:
     from vastly.update import check_for_update
 
     check_for_update()
+
+
+def cmd_connect(args: argparse.Namespace) -> None:
+    """Connect flow -- sync instances, check setup, run setup if needed, open IDE."""
+    _do_connect(
+        name=args.name,
+        select_all=args.all,
+        no_setup=args.no_setup,
+        force_setup=args.force_setup,
+    )
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -403,13 +470,9 @@ def cmd_stop(args: argparse.Namespace) -> None:
 
     # Give a specific error if named instance exists but can't be stopped
     if args.name:
-        match = [i for i in instances if i.name == args.name or i.alias == args.name]
-        if match and match[0].status in STOPPED_STATES:
-            raise VastlyError(f"Already {match[0].status}.")
-        if match and match[0].status not in STOPPABLE_STATES:
-            raise VastlyError(
-                f"'{args.name}' is {match[0].status} and cannot be stopped."
-            )
+        match = find_by_name(instances, args.name)
+        if match and match.status not in STOPPABLE_STATES:
+            raise VastlyError(f"{match.display_name} is already inactive.")
 
     stoppable = [i for i in instances if i.status in STOPPABLE_STATES]
     vastly.verbose(f"Found {len(stoppable)} stoppable instance(s)")
@@ -568,8 +631,8 @@ def cmd_start(args: argparse.Namespace) -> None:
 
     # Give a specific error if the named instance is already running
     if args.name:
-        match = [i for i in instances if i.name == args.name or i.alias == args.name]
-        if match and match[0].status == "running":
+        match = find_by_name(instances, args.name)
+        if match and match.status == "running":
             raise VastlyError(
                 f"'{args.name}' is already running. Run 'vst {args.name}' to connect."
             )
@@ -582,28 +645,21 @@ def cmd_start(args: argparse.Namespace) -> None:
     inst = select_instance(non_running, args.name)[0]
     vastly.verbose(f"Starting instance {inst.display_name} (status: {inst.status})")
 
+    queued = False
     if inst.status in STOPPED_STATES:
-        _vastai_action("start", inst)
+        queued = _vastai_start(inst)
     elif inst.status in TRANSITIONAL_STATES:
-        print(dim(f"  {inst.display_name} is {inst.status}, waiting for it to be ready..."))
+        print(dim(f"  {inst.display_name} is already starting, waiting..."))
     else:
-        raise VastlyError(f"Cannot start instance in '{inst.status}' state.")
+        raise VastlyError(f"Cannot start {inst.display_name} -- it is inactive and not startable.")
 
     if args.no_connect:
         return
 
-    _poll_for_running(str(inst.id), inst.display_name)
+    _poll_for_running(str(inst.id), inst.display_name, queued=queued)
 
     # Auto-connect: triggers a fresh sync_instances which writes SSH configs
-    connect_args = argparse.Namespace(
-        command="connect",
-        name=inst.alias or inst.name,
-        all=False,
-        no_setup=False,
-        force_setup=False,
-        verbose=getattr(args, "verbose", False),
-    )
-    cmd_connect(connect_args)
+    _do_connect(name=inst.alias or inst.name)
 
 
 def cmd_config(args: argparse.Namespace) -> None:
@@ -699,15 +755,16 @@ def cmd_ssh(args: argparse.Namespace) -> None:
     running = [i for i in all_instances if i.status == "running"]
 
     if not running:
-        startable = [i for i in all_instances if i.status in STOPPED_STATES]
+        startable = [
+            i for i in all_instances
+            if i.status in STARTABLE_STATES
+        ]
         if not startable:
             raise VastlyError("No Vast instances found.")
 
         if args.name:
-            match = [
-                i for i in startable if i.name == args.name or i.alias == args.name
-            ]
-            to_start = [match[0]] if match else None
+            match = find_by_name(startable, args.name)
+            to_start = [match] if match else None
         else:
             to_start = None
 
@@ -731,42 +788,27 @@ def cmd_ssh(args: argparse.Namespace) -> None:
     # it as a remote command.
     remote_cmd = list(args.remote_cmd) if args.remote_cmd else []
     if args.name:
-        match = [i for i in running if i.name == args.name or i.alias == args.name]
+        match = find_by_name(running, args.name)
         if match:
-            selected = [match[0]]
+            selected = [match]
         else:
-            # Check if name matches a stopped instance -- auto-start it
-            match_stopped = [
-                i
-                for i in all_instances
-                if (i.name == args.name or i.alias == args.name)
-                and i.status in STOPPED_STATES
-            ]
-            if match_stopped:
-                inst = match_stopped[0]
+            # Check if name matches a stopped/transitional instance -- auto-start it
+            found_all = find_by_name(all_instances, args.name)
+            if found_all and found_all.status in STARTABLE_STATES:
                 print(
                     yellow(
-                        f"  '{args.name}' is stopped. Starting {inst.display_name}..."
+                        f"  '{args.name}' is inactive. Starting {found_all.display_name}..."
                     )
                 )
-                all_instances, running = _start_and_resync([inst], config)
-                match = [
-                    i for i in running if i.name == args.name or i.alias == args.name
-                ]
+                all_instances, running = _start_and_resync([found_all], config)
+                match = find_by_name(running, args.name)
                 if not match:
                     raise VastlyError("Instance started but not reachable -- it may still be initializing. Check the Vast.ai dashboard.")
-                selected = [match[0]]
-            elif [
-                i for i in all_instances if i.name == args.name or i.alias == args.name
-            ]:
+                selected = [match]
+            elif found_all:
                 # Exists but in a non-startable state
-                found = [
-                    i
-                    for i in all_instances
-                    if i.name == args.name or i.alias == args.name
-                ][0]
                 raise VastlyError(
-                    f"'{args.name}' is {found.status} and cannot be started."
+                    f"{found_all.display_name} is {found_all.status} and cannot be started."
                 )
             else:
                 # No match at all -- check for typos before treating as command

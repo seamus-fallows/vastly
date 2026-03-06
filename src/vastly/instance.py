@@ -6,7 +6,6 @@ import json
 import re
 import subprocess
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +15,9 @@ from vastly import dim
 from vastly.errors import APIError, VastlyError
 from vastly.ssh import (
     SSH_CONFIG_DIR,
-    clear_ssh_configs,
     ensure_ssh_include,
     find_available_port,
+    prune_ssh_configs,
     write_ssh_config,
 )
 
@@ -32,8 +31,7 @@ class Instance:
     dph_total: float
     gpu_name: str
     num_gpus: int
-    start_date: float | None  # Unix timestamp
-    status: str  # "running", "stopped", "exited", etc.
+    status: str  # raw API state ("running", "stopped", "exited", etc.)
     alias: str | None
 
     @property
@@ -57,13 +55,14 @@ _RESERVED_NAMES = {
 }
 
 # Instance lifecycle state classifications
-STOPPABLE_STATES = {"running", "scheduling", "loading", "creating", "connecting"}
 STOPPED_STATES = {"stopped", "exited"}
-TRANSITIONAL_STATES = {"loading", "creating", "connecting", "scheduling"}
+TRANSITIONAL_STATES = {"loading", "creating", "connecting"}
+STARTABLE_STATES = STOPPED_STATES | TRANSITIONAL_STATES
+STOPPABLE_STATES = {"running"} | TRANSITIONAL_STATES
 
 
 def fetch_instances() -> list[dict[str, Any]]:
-    """Call vastai CLI and return list of running instances.
+    """Call vastai CLI and return raw instance data for all instances.
 
     Raises APIError if the API is unreachable or returns invalid data.
     """
@@ -98,7 +97,7 @@ def build_instance_name(inst: dict[str, Any], seen: set[str]) -> str:
 
     Appends the instance ID on collision.
     """
-    gpu_name = re.sub(r"\s+", "", inst.get("gpu_name", "")) or "unknown"
+    gpu_name = re.sub(r"[^a-zA-Z0-9]", "", inst.get("gpu_name", "")) or "unknown"
     num_gpus = inst.get("num_gpus", 1)
     geo = inst.get("geolocation", "")
 
@@ -162,22 +161,12 @@ def validate_alias(alias: str, instances: list[Instance], aliases: dict[str, str
             )
 
 
-def format_uptime(unix_ts: float | str | None) -> str:
-    """Format a Unix timestamp as a short uptime string ('3.1h' or '10m')."""
-    if not unix_ts:
-        return "?"
-    if isinstance(unix_ts, str):
-        try:
-            unix_ts = float(unix_ts)
-        except ValueError:
-            return "?"
-    started = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
-    now = datetime.now(tz=timezone.utc)
-    seconds = (now - started).total_seconds()
-    hours = seconds / 3600
-    if hours >= 1:
-        return f"{round(hours, 1)}h"
-    return f"{round(seconds / 60)}m"
+def find_by_name(instances: list[Instance], name: str) -> Instance | None:
+    """Return the instance matching by name or alias, or None."""
+    for i in instances:
+        if i.name == name or i.alias == name:
+            return i
+    return None
 
 
 def sync_instances(config: Config) -> list[Instance]:
@@ -186,7 +175,7 @@ def sync_instances(config: Config) -> list[Instance]:
     Returns a list of Instance objects for ALL states (running, stopped,
     exited, etc.). SSH configs are only written for running instances.
 
-    Raises APIError if the API is unreachable and no cached configs exist.
+    Raises APIError if the API is unreachable.
     """
     ensure_ssh_include()
     SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -196,8 +185,6 @@ def sync_instances(config: Config) -> list[Instance]:
     running = [i for i in all_api if i.get("cur_state") == "running"]
     non_running = [i for i in all_api if i.get("cur_state") != "running"]
     vastly.verbose(f"API returned {len(all_api)} instances, {len(running)} running")
-
-    clear_ssh_configs()
 
     seen: set[str] = set()
     used_ports: set[int] = set()
@@ -210,10 +197,22 @@ def sync_instances(config: Config) -> list[Instance]:
     for inst in running:
         name = build_instance_name(inst, seen)
 
-        # Get SSH port -- skip instances without port 22 exposed
+        # Get SSH port -- if no ports yet, the instance is still starting
         try:
             ssh_port = inst["ports"]["22/tcp"][0]["HostPort"]
         except (KeyError, IndexError, TypeError):
+            # cur_state says "running" but no ports -- use actual_status
+            actual = inst.get("actual_status", "loading")
+            status = actual if actual != "running" else "loading"
+            results.append(Instance(
+                name=name,
+                id=inst["id"],
+                dph_total=inst.get("dph_total", 0),
+                gpu_name=inst.get("gpu_name", ""),
+                num_gpus=inst.get("num_gpus", 0),
+                status=status,
+                alias=None,
+            ))
             continue
 
         local_forwards = []
@@ -245,7 +244,6 @@ def sync_instances(config: Config) -> list[Instance]:
             dph_total=inst.get("dph_total", 0),
             gpu_name=inst.get("gpu_name", ""),
             num_gpus=inst.get("num_gpus", 0),
-            start_date=inst.get("start_date"),
             status="running",
             alias=None,
         ))
@@ -253,13 +251,13 @@ def sync_instances(config: Config) -> list[Instance]:
     # Process non-running instances (no SSH config, no port extraction)
     for inst in non_running:
         name = build_instance_name(inst, seen)
+
         results.append(Instance(
             name=name,
             id=inst["id"],
             dph_total=inst.get("dph_total", 0),
             gpu_name=inst.get("gpu_name", ""),
             num_gpus=inst.get("num_gpus", 0),
-            start_date=inst.get("start_date"),
             status=inst.get("cur_state", "unknown"),
             alias=None,
         ))
@@ -290,6 +288,11 @@ def sync_instances(config: Config) -> list[Instance]:
                     local_forwards=params["local_forwards"],
                 )
 
+    # Prune stale SSH configs (ones we didn't just write)
+    written_configs = {r.name for r in results if r.status == "running" and r.id in ssh_params}
+    written_configs |= {r.alias for r in results if r.alias and r.status == "running" and r.id in ssh_params}
+    prune_ssh_configs(written_configs)
+
     return results
 
 
@@ -297,7 +300,7 @@ def get_synced_instances(config: Config) -> list[Instance]:
     """Sync and return all instances (any state).
 
     Raises VastlyError if no instances exist at all.
-    Raises APIError if the API is unreachable and no cached configs exist.
+    Raises APIError if the API is unreachable.
     """
     result = sync_instances(config)
     if not result:
@@ -308,16 +311,14 @@ def get_synced_instances(config: Config) -> list[Instance]:
 def get_running_instances(config: Config) -> list[Instance]:
     """Sync and return only running instances.
 
-    Raises VastlyError if no running instances exist. When stopped/exited
-    instances exist, the error message suggests vst list and vst start.
+    Raises VastlyError if no running instances exist.
     """
     all_instances = sync_instances(config)
     running = [i for i in all_instances if i.status == "running"]
     if not running:
-        stopped = [i for i in all_instances if i.status != "running"]
-        if stopped:
+        if all_instances:
             raise VastlyError(
-                f"No running instances. {len(stopped)} stopped/exited. "
+                f"No running instances. {len(all_instances)} inactive. "
                 "Use 'vst list' to see all, 'vst start' to restart."
             )
         raise VastlyError("No Vast instances found.")
@@ -336,9 +337,9 @@ def show_table(instances: list[Instance]) -> None:
         label = inst.display_name
         cost = f"${inst.dph_total:.2f}/hr"
         if inst.status == "running":
-            rows.append((label, cost, f"{format_uptime(inst.start_date)} uptime", True))
+            rows.append((label, cost, "running", True))
         else:
-            rows.append((label, cost, inst.status, False))
+            rows.append((label, cost, "inactive", False))
 
     label_w = max(len(r[0]) for r in rows)
     cost_w = max(len(r[1]) for r in rows)
@@ -356,6 +357,7 @@ def select_instance(
     name: str | None = None,
     *,
     allow_all: bool = False,
+    prompt: str = "Select instance:",
 ) -> list[Instance]:
     """Select instance(s) by name/alias, auto-select if only one, or prompt.
 
@@ -366,14 +368,14 @@ def select_instance(
         raise VastlyError("No instances available.")
 
     if name:
-        match = [i for i in instances if i.name == name or i.alias == name]
+        match = find_by_name(instances, name)
         if not match:
             labels = [i.display_name for i in instances]
             raise VastlyError(
                 f"No instance named '{name}'. Available: {', '.join(labels)}"
             )
-        vastly.verbose(f"Matched instance by name/alias: {match[0].display_name}")
-        return match
+        vastly.verbose(f"Matched instance by name/alias: {match.display_name}")
+        return [match]
 
     if len(instances) == 1:
         vastly.verbose(f"Auto-selected sole instance: {instances[0].display_name}")
@@ -381,7 +383,7 @@ def select_instance(
 
     # Interactive selection
     labels = [i.display_name for i in instances]
-    print("Select instance:")
+    print(prompt)
     for i, label in enumerate(labels):
         print(f"  [{i + 1}] {label}")
     if allow_all:
