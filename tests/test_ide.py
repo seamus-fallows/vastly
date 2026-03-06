@@ -38,3 +38,14 @@ class TestOpenIde:
             cmd_arg = mock_popen.call_args[0][0]
             assert isinstance(cmd_arg, list)
             assert "shell" not in mock_popen.call_args[1]
+
+    def test_cursor_command(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        captured = []
+        monkeypatch.setattr(
+            "vastly.ide.subprocess.Popen", lambda cmd, **kw: captured.append(cmd)
+        )
+        open_ide("cursor", "myhost", "/workspace/proj")
+
+        assert captured[0][0] == "cursor"
+        assert "ssh-remote+myhost" in captured[0][2]

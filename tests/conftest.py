@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
+from vastly.config import DEFAULTS
 from vastly.instance import Instance
+
+
+# ── Non-fixture helpers (usable without pytest fixtures) ─────────────
 
 
 def make_test_instance(name="test", inst_id=1, **kwargs):
@@ -15,6 +19,16 @@ def make_test_instance(name="test", inst_id=1, **kwargs):
     )
     defaults.update(kwargs)
     return Instance(**defaults)
+
+
+def make_test_config(**overrides) -> dict:
+    """Create a complete config dict with sensible defaults for testing."""
+    base = {**DEFAULTS}
+    base.update(overrides)
+    return base
+
+
+# ── Fixtures ─────────────────────────────────────────────────────────
 
 
 @pytest.fixture
@@ -43,18 +57,7 @@ def make_config():
     """Factory for vastly config dicts with sensible defaults."""
 
     def _make(**overrides):
-        base = {
-            "ide": "code",
-            "sshKeyPath": None,
-            "sshUser": "root",
-            "portForwards": [{"local": 8080, "remote": 8080}],
-            "workspace": "/workspace",
-            "disableAutoTmux": True,
-            "gitRemote": "origin",
-            "postInstall": [],
-            "installCommand": None,
-            "copyFiles": [],
-        }
+        base = {**DEFAULTS}
         base.update(overrides)
         return base
 
