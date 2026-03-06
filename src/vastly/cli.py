@@ -199,7 +199,13 @@ def _build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argumen
     """Build and return (parser, {cmd_name: subparser})."""
     hint = "auto-selects if only one, prompts if multiple"
 
-    parser = argparse.ArgumentParser(prog="vst", add_help=False)
+    class _Parser(argparse.ArgumentParser):
+        def error(self, message: str) -> None:
+            print(red(f"vst: {message}"), file=sys.stderr)
+            print(dim("Run 'vst -h' for help."), file=sys.stderr)
+            sys.exit(2)
+
+    parser = _Parser(prog="vst", add_help=False)
     parser.add_argument("--version", action="version", version=f"vastly {__version__}")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--all", action="store_true", help=argparse.SUPPRESS)
