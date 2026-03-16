@@ -43,7 +43,7 @@ vst
 
 `vst` does all of this for you -- syncs SSH configs with agent forwarding, clones your repo, installs deps, activates your Python environment, copies configured files not in git, and opens your IDE. On repeat runs, setup is skipped.
 
-- **Named instances** -- `1xRTX4090-TW` instead of IPs (duplicates get the instance ID appended); pick from a list when you have multiple; assign custom aliases with `vst name`
+- **Named instances** -- `1xrtx4090-tw` instead of IPs (duplicates get the instance ID appended); pick from a list when you have multiple; assign custom aliases with `vst name`
 - **Auto-start** -- if no running instances, `vst` starts a stopped one and connects
 - **Environment auto-detection** -- activates conda/venv on Vast.ai images, auto-detects uv, pip, or setup.py for dependency install
 - **SSH agent forwarding** -- authenticate with git hosts without copying keys to the instance

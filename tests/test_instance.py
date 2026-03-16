@@ -97,7 +97,7 @@ class TestSyncInstances:
         result = sync_instances(make_test_config())
         running = [i for i in result if i.status == "running"]
         assert len(running) == 1
-        assert running[0].name == "1xRTX4090-TW"
+        assert running[0].name == "1xrtx4090-tw"
 
     def test_returns_all_instances_including_non_running(self, monkeypatch):
         monkeypatch.setattr(
@@ -357,12 +357,12 @@ class TestInstanceNaming:
             "id": 111,
         }
         seen = set()
-        assert build_instance_name(inst, seen) == "1xRTX4090-TW"
+        assert build_instance_name(inst, seen) == "1xrtx4090-tw"
 
     def test_omits_country_when_empty(self):
         inst = {"gpu_name": "A100", "num_gpus": 2, "geolocation": "", "id": 111}
         seen = set()
-        assert build_instance_name(inst, seen) == "2xA100"
+        assert build_instance_name(inst, seen) == "2xa100"
 
     def test_strips_spaces_from_gpu(self):
         inst = {
@@ -391,13 +391,13 @@ class TestInstanceNaming:
         seen = set()
         name1 = build_instance_name(inst1, seen)
         name2 = build_instance_name(inst2, seen)
-        assert name1 == "1xRTX4090-TW"
-        assert name2 == "1xRTX4090-TW-222"
+        assert name1 == "1xrtx4090-tw"
+        assert name2 == "1xrtx4090-tw-222"
 
     def test_handles_missing_geolocation_key(self):
         inst = {"gpu_name": "A100", "num_gpus": 1, "id": 111}
         seen = set()
-        assert build_instance_name(inst, seen) == "1xA100"
+        assert build_instance_name(inst, seen) == "1xa100"
 
     def test_defaults_num_gpus_to_one(self):
         inst = {"gpu_name": "A100", "geolocation": "", "id": 111}
@@ -408,7 +408,7 @@ class TestInstanceNaming:
         """A geolocation with no comma yields no country suffix."""
         inst = {"gpu_name": "A100", "num_gpus": 1, "geolocation": "US", "id": 111}
         seen = set()
-        assert build_instance_name(inst, seen) == "1xA100"
+        assert build_instance_name(inst, seen) == "1xa100"
 
     def test_three_way_collision(self):
         base = {"gpu_name": "A100", "num_gpus": 1, "geolocation": "City, US"}
@@ -416,9 +416,9 @@ class TestInstanceNaming:
         n1 = build_instance_name({**base, "id": 1}, seen)
         n2 = build_instance_name({**base, "id": 2}, seen)
         n3 = build_instance_name({**base, "id": 3}, seen)
-        assert n1 == "1xA100-US"
-        assert n2 == "1xA100-US-2"
-        assert n3 == "1xA100-US-3"
+        assert n1 == "1xa100-us"
+        assert n2 == "1xa100-us-2"
+        assert n3 == "1xa100-us-3"
 
     def test_handles_missing_gpu_name(self):
         inst = {"num_gpus": 1, "geolocation": "", "id": 111}
@@ -628,8 +628,8 @@ class TestSyncInstancesLifecycle:
         running = [r for r in results if r.status == "running"][0]
         stopped = [r for r in results if r.status == "stopped"][0]
         # Running gets clean name, stopped gets collision suffix
-        assert running.name == "1xRTX4090-TW"
-        assert stopped.name == "1xRTX4090-TW-2"
+        assert running.name == "1xrtx4090-tw"
+        assert stopped.name == "1xrtx4090-tw-2"
 
     def test_non_running_uses_cur_state(self, monkeypatch):
         """Non-running instances store the raw API cur_state."""
@@ -854,8 +854,8 @@ class TestSyncInstancesIntegration:
         ids = {r.id for r in results}
         assert ids == {12345, 67890}
         names = {r.name for r in results}
-        assert "1xRTX4090-US" in names
-        assert "2xA100-DE" in names
+        assert "1xrtx4090-us" in names
+        assert "2xa100-de" in names
 
     def test_handles_mixed_states(self, monkeypatch):
         api_data = [
@@ -1048,7 +1048,7 @@ class TestGpuNameSanitization:
         inst = {"gpu_name": "RTX 4090", "num_gpus": 1, "geolocation": "", "id": 1}
         name = build_instance_name(inst, set())
         assert " " not in name
-        assert "RTX4090" in name
+        assert "rtx4090" in name
 
     def test_strips_shell_metacharacters(self):
         inst = {"gpu_name": "GPU;rm -rf /", "num_gpus": 1, "geolocation": "", "id": 1}
@@ -1069,4 +1069,4 @@ class TestGpuNameSanitization:
         assert "(" not in name
         assert ")" not in name
         assert "/" not in name
-        assert "2xA10080GBPCIe" == name
+        assert "2xa10080gbpcie" == name

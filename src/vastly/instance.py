@@ -100,7 +100,10 @@ def fetch_instances() -> list[dict[str, Any]]:
 
 
 def build_instance_name(inst: dict[str, Any], seen: set[str]) -> str:
-    """Generate a human-readable name like '1xRTX4090-TW'.
+    """Generate a human-readable name like '1xrtx4090-tw'.
+
+    Names are lowercased to stay compatible with tools (e.g. VS Code
+    Remote-SSH) that normalise SSH host aliases to lowercase.
 
     Appends the instance ID on collision.
     """
@@ -112,6 +115,7 @@ def build_instance_name(inst: dict[str, Any], seen: set[str]) -> str:
     country = m.group(1) if m else ""
 
     base = f"{num_gpus}x{gpu_name}-{country}" if country else f"{num_gpus}x{gpu_name}"
+    base = base.lower()
 
     if base in seen:
         # Collision: append ID to disambiguate (don't add to seen -- we
