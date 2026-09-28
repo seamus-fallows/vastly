@@ -46,7 +46,7 @@ vst
 - **Named instances** -- `1xrtx4090-tw` instead of IPs (duplicates get the instance ID appended); pick from a list when you have multiple; assign custom aliases with `vst name`
 - **Auto-start** -- if no running instances, `vst` starts a stopped one and connects
 - **Environment auto-detection** -- activates conda/venv on Vast.ai images, auto-detects uv, pip, or setup.py for dependency install
-- **SSH agent forwarding** -- authenticate with git hosts without copying keys to the instance
+- **Git access** -- SSH agent forwarding by default, or a per-repo GitHub deploy key so the instance can only reach that one repo (see [Git access on your instance](#git-access-on-your-instance))
 - **File transfer** -- `vst cp up .env` / `vst cp down results/` without remembering IPs
 - **Per-project config** -- `.vastly.json` in your repo root for project-specific settings
 
@@ -58,6 +58,7 @@ vst [name]                   # connect by name or alias
 vst --all                    # connect to all running instances
 vst -f                       # re-run remote setup even if already done
 vst -n                       # open IDE without cloning or installing
+vst --git-auth MODE          # agent, auto, or deploy-key for this run
 vst list                     # list all instances (running, stopped, etc.)
 vst start [name | --all]     # start a stopped instance, wait, then connect
 vst start -n                 # start without connecting
@@ -115,7 +116,11 @@ On first run, `vastly` creates `~/.vastly/config.json` with defaults:
   // Files/directories to copy from local repo to remote after setup
   // Paths are relative to the repo root. Directories are copied recursively
   // e.g. [".claude/", ".env.template"]
-  "copyFiles": []
+  "copyFiles": [],
+
+  // How instances get git access: "agent", "auto", or "deploy-key"
+  // See "Git access on your instance" below
+  "gitAuth": "agent"
 }
 ```
 
@@ -130,7 +135,7 @@ You can create a `.vastly.json` in your repo root to set project-specific config
 - `copyFiles`
 - `gitRemote`
 
-User-specific keys (`ide`, `sshKeyPath`, `sshUser`, `disableAutoTmux`) are always read from the global `~/.vastly/config.json` and ignored in project configs.
+User-specific keys (`ide`, `sshKeyPath`, `sshUser`, `disableAutoTmux`, `gitAuth`) are always read from the global `~/.vastly/config.json` and ignored in project configs. (A repo can't choose how your credentials are used.)
 
 > **Note:** `postInstall` and `installCommand` run as shell commands on your remote instance during setup. Review `.vastly.json` before running `vst` in unfamiliar repositories, just as you would review a `Makefile` or `package.json` scripts.
 
@@ -142,12 +147,45 @@ User-specific keys (`ide`, `sshKeyPath`, `sshUser`, `disableAutoTmux`) are alway
 }
 ```
 
-## Authentication
+## Git access on your instance
 
-To clone private repos or push to any repo, you need to authenticate with your git host:
+To clone and push from an instance, vastly forwards your SSH agent by default. This is common practice, and your key is never copied to the instance -- but while you're connected, whoever controls the machine could use it to reach anything your key can access.
 
-- **SSH remotes** (`git@github.com:...`): Vastly enables SSH agent forwarding automatically. Your local SSH key is used for the duration of the connection -- never copied to the instance. Make sure your key is loaded in your SSH agent (`ssh-add -l` to check).
-- **HTTPS remotes** (`https://github.com/...`): Public repos clone without authentication, but pushing requires a personal access token. You can configure one on the instance, or switch to an SSH remote: `git remote set-url origin git@github.com:user/repo.git`.
+**Recommended:** let vastly create a separate key for each repo instead. The key only works for that one repo, and vastly deletes it when you destroy the instance.
+
+**One-time setup:**
+
+```sh
+# install the GitHub CLI: https://cli.github.com (e.g. winget install GitHub.cli, brew install gh)
+gh auth login
+```
+
+Then add to `~/.vastly/config.json`:
+
+```json
+"gitAuth": "auto"
+```
+
+**What `auto` does:** uses a per-repo deploy key when you're an admin of the repo. Otherwise (for example a company repo where you're not an admin, or a repo not on GitHub) it falls back to agent forwarding and tells you why. Run `vst config` inside a repo to see which will be used.
+
+| Setting | Behavior |
+|---|---|
+| `"agent"` (default) | Always forward your SSH agent |
+| `"auto"` | Per-repo deploy key when possible, otherwise agent forwarding |
+| `"deploy-key"` | Per-repo deploy key only; setup stops with an explanation if that's not possible |
+
+One-off override: `vst --git-auth agent` (or `auto`, `deploy-key`).
+
+Good to know:
+
+- Deploy keys have write access, so you can push from the instance as usual. Agent forwarding is turned off for instances that only use deploy keys.
+- Instances you set up before switching keep agent forwarding. Run `vst -f` to move them to a deploy key.
+- If you destroy an instance on the Vast.ai website, vastly removes its deploy keys the next time it runs. You can always review them under your repo's **Settings > Deploy keys** (keys are titled `vastly-<instance id>`).
+
+**Agent forwarding tips:**
+
+- **SSH remotes** (`git@github.com:...`): make sure your key is loaded in your SSH agent (`ssh-add -l` to check).
+- **HTTPS remotes** (`https://github.com/...`): public repos clone without authentication, but pushing requires credentials. Switch to an SSH remote (`git remote set-url origin git@github.com:user/repo.git`) or use a deploy key, which always clones over SSH.
 
 ## Troubleshooting
 
@@ -157,4 +195,6 @@ To clone private repos or push to any repo, you need to authenticate with your g
 
 **"Not in a git repo"** -- `vastly` reads the remote URL from your local repo. Run from inside a git repo, or use `vst --no-setup`.
 
-**"Cannot access repo"** -- For SSH remotes, check that your SSH agent is running and your key is loaded (`ssh-add -l`). For HTTPS remotes, you may need a personal access token or to switch to SSH (see Authentication above).
+**"Cannot access repo"** -- For SSH remotes, check that your SSH agent is running and your key is loaded (`ssh-add -l`). For HTTPS remotes, you may need a personal access token or to switch to SSH. With a deploy key, run `vst -f` to recreate it, or `vst --git-auth agent` to use agent forwarding instead (see [Git access on your instance](#git-access-on-your-instance)).
+
+**"No Vast instances found"** -- vastly uses whichever Vast.ai account your API key belongs to. Run `vst config` to see which account is active, and `vastai set api-key <key>` to switch.
