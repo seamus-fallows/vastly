@@ -20,7 +20,8 @@ from vastly.ssh import run_ssh
 
 STATE_FILE = Path.home() / ".vastly" / "deploy-keys.json"
 
-# Deploy keys vastly creates are titled "vastly-<instance id>"
+# Deploy keys vastly creates are titled "vastly-<vast account id>-<instance id>",
+# so stale ones can be found on GitHub without this machine's local state
 _TITLE_PREFIX = "vastly-"
 
 _GITHUB_URL = re.compile(
@@ -39,9 +40,11 @@ def github_repo(repo_url: str) -> str | None:
     return f"{m.group(1)}/{m.group(2)}" if m else None
 
 
-def key_title(inst_id: int) -> str:
+def key_title(inst_id: int, account: int | None) -> str:
     """Title of the deploy key vastly adds for an instance."""
-    return f"{_TITLE_PREFIX}{inst_id}"
+    if account is None:
+        return f"{_TITLE_PREFIX}{inst_id}"
+    return f"{_TITLE_PREFIX}{account}-{inst_id}"
 
 
 def ssh_url(repo: str) -> str:
@@ -153,7 +156,7 @@ def account_id() -> int | None:
 # ── Instance side ───────────────────────────────────────────────────
 
 
-def ensure_instance_key(host: str, repo_name: str, inst_id: int) -> str:
+def ensure_instance_key(host: str, repo_name: str, comment: str) -> str:
     """Create the repo's key pair on the instance if missing; return the public key.
 
     The private key never leaves the instance. The path must match
@@ -162,7 +165,7 @@ def ensure_instance_key(host: str, repo_name: str, inst_id: int) -> str:
     cmd = (
         f"k=~/.ssh/vastly-{shlex.quote(repo_name)}; "
         "mkdir -p ~/.ssh && chmod 700 ~/.ssh && "
-        f'{{ [ -f "$k" ] || ssh-keygen -q -t ed25519 -N \'\' -C {key_title(inst_id)} -f "$k"; }} && '
+        f'{{ [ -f "$k" ] || ssh-keygen -q -t ed25519 -N \'\' -C {shlex.quote(comment)} -f "$k"; }} && '
         'cat "$k.pub"'
     )
     result = run_ssh(host, cmd)
@@ -258,6 +261,29 @@ def _delete_keys(entry: dict) -> None:
                     f"Remove it at https://github.com/{repo}/settings/keys"
                 )
             )
+
+
+def prune_repo_keys(repo: str, account: int, live_ids: set[int]) -> None:
+    """Delete this account's deploy keys on *repo* whose instance no longer exists.
+
+    Covers keys created from another machine (not in this machine's state).
+    Only keys titled for *account* are considered: an instance missing from
+    this account's list may belong to a different account.
+    """
+    listing = _gh("api", f"repos/{repo}/keys?per_page=100")
+    if listing.returncode != 0:
+        vastly.verbose(f"Couldn't list deploy keys on {repo}: {_error(listing)}")
+        return
+    try:
+        keys = json.loads(listing.stdout)
+    except json.JSONDecodeError:
+        return
+    pattern = re.compile(rf"^{re.escape(_TITLE_PREFIX)}{account}-(\d+)$")
+    for key in keys:
+        m = pattern.match(key.get("title", ""))
+        if m and int(m.group(1)) not in live_ids:
+            if delete_deploy_key(repo, key["id"]):
+                print(dim(f"  Removed stale deploy key {key['title']} from {repo}"))
 
 
 def remove_instance_keys(inst_id: int) -> None:

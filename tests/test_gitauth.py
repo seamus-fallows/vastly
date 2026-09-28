@@ -178,18 +178,58 @@ class TestEnsureInstanceKey:
             return _done(f"Generating...\n{_PUB}\n")
 
         monkeypatch.setattr("vastly.gitauth.run_ssh", fake_ssh)
-        assert gitauth.ensure_instance_key("gpu-1", "repo", 7) == _PUB
+        assert gitauth.ensure_instance_key("gpu-1", "repo", "vastly-99-7") == _PUB
         host, command = commands[0]
         assert host == "gpu-1"
         assert "~/.ssh/vastly-repo" in command
-        assert "ssh-keygen" in command and "-C vastly-7" in command
+        assert "ssh-keygen" in command and "-C vastly-99-7" in command
 
     def test_failure_raises(self, monkeypatch):
         monkeypatch.setattr(
             "vastly.gitauth.run_ssh", lambda *a, **kw: _done(rc=255, stderr="timeout")
         )
         with pytest.raises(GitHubError, match="create a key"):
-            gitauth.ensure_instance_key("gpu-1", "repo", 7)
+            gitauth.ensure_instance_key("gpu-1", "repo", "vastly-99-7")
+
+
+class TestKeyTitle:
+    def test_includes_account(self):
+        assert gitauth.key_title(7, 99) == "vastly-99-7"
+
+    def test_without_account(self):
+        assert gitauth.key_title(7, None) == "vastly-7"
+
+
+class TestPruneRepoKeys:
+    """Stale keys on GitHub are removed even if another machine created them."""
+
+    def _keys(self, monkeypatch, keys):
+        fake = FakeGh({("api", "repos/o/r/keys?per_page=100"): _done(json.dumps(keys))})
+        monkeypatch.setattr("vastly.gitauth._gh", fake)
+        deleted = []
+        monkeypatch.setattr(
+            "vastly.gitauth.delete_deploy_key",
+            lambda repo, key_id: deleted.append(key_id) or True,
+        )
+        return deleted
+
+    def test_deletes_only_this_accounts_keys_for_gone_instances(self, monkeypatch):
+        deleted = self._keys(
+            monkeypatch,
+            [
+                {"id": 1, "title": "vastly-99-7"},  # live instance: keep
+                {"id": 2, "title": "vastly-99-8"},  # gone: delete
+                {"id": 3, "title": "vastly-55-8"},  # other account: keep
+                {"id": 4, "title": "vastly-8"},  # no account in title: keep
+                {"id": 5, "title": "my laptop"},  # not vastly's: keep
+            ],
+        )
+        gitauth.prune_repo_keys("o/r", account=99, live_ids={7})
+        assert deleted == [2]
+
+    def test_listing_failure_is_quiet(self, monkeypatch):
+        monkeypatch.setattr("vastly.gitauth._gh", lambda *a, **kw: _done(rc=1))
+        gitauth.prune_repo_keys("o/r", account=99, live_ids=set())  # no raise
 
 
 # ── TestState ────────────────────────────────────────────────────────

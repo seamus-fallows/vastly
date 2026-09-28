@@ -461,6 +461,7 @@ def _do_connect(
         config,
         force_setup=force_setup,
         project_dir=git_root,
+        live_ids={inst.id for inst in all_instances},
     )
     display_names = {inst.name: inst.display_name for inst in selected}
     for inst_name in success_names:

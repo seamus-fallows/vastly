@@ -42,12 +42,13 @@ def _add_deploy_key(
 
     Returns None on success, or a short reason it didn't work.
     """
+    title = gitauth.key_title(inst.id, account)
     try:
-        public_key = gitauth.ensure_instance_key(inst.name, repo_name, inst.id)
+        public_key = gitauth.ensure_instance_key(inst.name, repo_name, title)
     except gitauth.GitHubError as e:
         return str(e)
     try:
-        key_id = gitauth.add_deploy_key(repo, gitauth.key_title(inst.id), public_key)
+        key_id = gitauth.add_deploy_key(repo, title, public_key)
     except gitauth.GitHubError as e:
         return f"GitHub rejected the key ({e})"
     gitauth.record_deploy_key(inst.id, repo, key_id, account)
@@ -62,8 +63,13 @@ def setup_instances(
     *,
     force_setup: bool = False,
     project_dir: Path | None = None,
+    live_ids: set[int] | None = None,
 ) -> list[str]:
-    """Run remote setup on each instance. Returns list of successful host names."""
+    """Run remote setup on each instance. Returns list of successful host names.
+
+    *live_ids* are all instance IDs on the current Vast.ai account; when given,
+    the repo's stale vastly deploy keys are cleaned up while setting up keys.
+    """
     git_name = None
     git_email = None
 
@@ -90,6 +96,7 @@ def setup_instances(
     blocker: str | None = None
     blocker_checked = False
     account: int | None = None
+    pruned = False
 
     for inst in instances:
         name = inst.name
@@ -215,6 +222,11 @@ def setup_instances(
             if problem is None:
                 use_key = True
                 print(dim(f"  {label}: using a deploy key for {github}"))
+                # Once per run: remove keys left by destroyed instances (also
+                # ones created from other machines)
+                if not pruned and live_ids is not None and account is not None:
+                    pruned = True
+                    gitauth.prune_repo_keys(github, account, live_ids)
             elif mode == "deploy-key":
                 print(red(f"  {label}: can't use a deploy key -- {problem}."))
                 print(

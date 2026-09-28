@@ -308,6 +308,7 @@ class TestSetupInstances:
         blocker=None,
         add_error=None,
         instances=None,
+        live_ids=None,
     ):
         """Run setup with gitAuth=*mode*. Returns (result, setup args, forward calls)."""
         from vastly import gitauth
@@ -334,9 +335,19 @@ class TestSetupInstances:
             lambda repo: self.blocker_calls.append(repo) or blocker,
         )
         monkeypatch.setattr("vastly.gitauth.account_id", lambda: 99)
+        self.key_titles = []
         monkeypatch.setattr(
             "vastly.gitauth.ensure_instance_key",
-            lambda host, name, inst_id: "ssh-ed25519 AAAA vastly-1",
+            lambda host, name, title: (
+                self.key_titles.append(title) or "ssh-ed25519 AAAA vastly-1"
+            ),
+        )
+        self.prune_calls = []
+        monkeypatch.setattr(
+            "vastly.gitauth.prune_repo_keys",
+            lambda repo, account, live_ids: self.prune_calls.append(
+                (repo, account, live_ids)
+            ),
         )
         monkeypatch.setattr("vastly.gitauth.add_deploy_key", fake_add)
         monkeypatch.setattr(
@@ -344,7 +355,9 @@ class TestSetupInstances:
             lambda host, enabled: forwards.append((host, enabled)),
         )
         config = {**self._base_config(), "gitAuth": mode}
-        result = setup_instances(instances or [_inst("gpu-1")], repo_url, "r", config)
+        result = setup_instances(
+            instances or [_inst("gpu-1")], repo_url, "r", config, live_ids=live_ids
+        )
         args = [_setup_args(cmd) for cmd in setup_cmds]
         return result, args, forwards
 
@@ -438,6 +451,20 @@ class TestSetupInstances:
 
         self._run_git_auth_setup(monkeypatch, "agent")
         assert gitauth.load_state() == {}
+
+    def test_deploy_key_title_includes_account_and_prunes_once(self, monkeypatch):
+        _, _, _ = self._run_git_auth_setup(
+            monkeypatch,
+            "auto",
+            instances=[_inst("gpu-1", 1), _inst("gpu-2", 2)],
+            live_ids={1, 2, 3},
+        )
+        assert self.key_titles == ["vastly-99-1", "vastly-99-2"]
+        assert self.prune_calls == [("u/r", 99, {1, 2, 3})]
+
+    def test_no_pruning_without_live_ids(self, monkeypatch):
+        self._run_git_auth_setup(monkeypatch, "auto")
+        assert self.prune_calls == []
 
     def test_deploy_key_possibility_checked_once(self, monkeypatch):
         result, args, _ = self._run_git_auth_setup(

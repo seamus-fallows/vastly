@@ -180,7 +180,7 @@ Good to know:
 
 - Deploy keys have write access, so you can push from the instance as usual. Agent forwarding is turned off for instances that only use deploy keys.
 - Instances you set up before switching keep agent forwarding. Run `vst -f` to move them to a deploy key.
-- If you destroy an instance on the Vast.ai website, vastly removes its deploy keys the next time it runs. You can always review them under your repo's **Settings > Deploy keys** (keys are titled `vastly-<instance id>`).
+- `vst destroy` removes an instance's deploy keys. Keys left by instances destroyed elsewhere (on the Vast.ai website, or from another computer) are removed the next time vastly sets up that repo. You can always review them under your repo's **Settings > Deploy keys**: vastly's keys are titled `vastly-<account id>-<instance id>`, and it only ever removes keys for the Vast.ai account you're currently using.
 
 **Agent forwarding tips:**
 
