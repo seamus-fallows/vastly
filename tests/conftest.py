@@ -52,17 +52,33 @@ def make_api_instance(
 
 
 @pytest.fixture(autouse=True)
-def _isolate_gitauth(tmp_path, monkeypatch):
-    """Keep every test away from real deploy keys.
+def _isolate_home(request, tmp_path_factory, monkeypatch):
+    """Keep every test away from your real ~/.vastly, ~/.ssh/vast.d, and deploy keys.
 
-    Deploy key state goes to a temp file, and any GitHub CLI or account
-    lookup a test hasn't explicitly mocked fails loudly instead of running.
+    vastly's files go to a temp home, and any GitHub CLI or account lookup a
+    test hasn't explicitly mocked fails loudly instead of running. The live
+    integration tests (opt-in) are exempt: they need the real SSH configs.
     """
+    if request.module.__name__ == "test_integration":
+        return
+
+    # Separate from tmp_path, which some tests expect to start empty
+    home = tmp_path_factory.mktemp("home")
+    vastly_dir = home / ".vastly"
+    vastly_dir.mkdir()
+    ssh_dir = home / ".ssh" / "vast.d"
+    monkeypatch.setattr("vastly.config.CONFIG_DIR", vastly_dir)
+    monkeypatch.setattr("vastly.config.CONFIG_PATH", vastly_dir / "config.json")
+    monkeypatch.setattr("vastly.instance._ALIASES_FILE", vastly_dir / "aliases.json")
+    monkeypatch.setattr("vastly.update._CACHE_DIR", vastly_dir)
+    monkeypatch.setattr("vastly.update._CACHE_FILE", vastly_dir / ".last-update-check")
+    monkeypatch.setattr("vastly.gitauth.STATE_FILE", vastly_dir / "deploy-keys.json")
+    for module in ("vastly.ssh", "vastly.instance", "vastly.commands"):
+        monkeypatch.setattr(f"{module}.SSH_CONFIG_DIR", ssh_dir)
 
     def _unmocked(*_args, **_kwargs):
         raise AssertionError("unmocked GitHub CLI / Vast.ai account call in a test")
 
-    monkeypatch.setattr("vastly.gitauth.STATE_FILE", tmp_path / "deploy-keys.json")
     monkeypatch.setattr("vastly.gitauth._gh", _unmocked)
     monkeypatch.setattr("vastly.gitauth.account_id", _unmocked)
 
