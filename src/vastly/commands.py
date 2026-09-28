@@ -951,7 +951,7 @@ def cmd_ssh(args: argparse.Namespace) -> None:
             ssh_cmd = ["ssh", *SSH_OPTS, inst.name, *remote_cmd]
             vastly.verbose(f"ssh command: {' '.join(ssh_cmd)}")
             if len(selected) > 1:
-                print(green(f"  ── {inst.display_name} ──"))
+                print(green(f"  -- {inst.display_name} --"))
             result = subprocess.run(ssh_cmd)
             if result.returncode != 0:
                 failed += 1
