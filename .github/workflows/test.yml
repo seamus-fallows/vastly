@@ -2,10 +2,18 @@ name: Tests
 on: [push, pull_request]
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
+      # Keep going when one platform fails, to see if the others pass
+      fail-fast: false
       matrix:
-        python-version: ["3.9", "3.12", "3.13"]
+        # vastly runs on the user's machine, so every desktop OS matters --
+        # Windows especially (code/cursor .cmd shims, NUL, CRLF, cp1252 output)
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.14"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

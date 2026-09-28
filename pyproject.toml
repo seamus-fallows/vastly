@@ -7,7 +7,7 @@ name = "vastly"
 dynamic = ["version"]
 description = "Connect to Vast.ai GPU instances: sync SSH configs, set up your project, and open your IDE."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "Seamus Fallows" }]
 keywords = ["vast.ai", "gpu", "ssh", "remote-development"]
 classifiers = [
@@ -16,11 +16,11 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development",
 ]
 
