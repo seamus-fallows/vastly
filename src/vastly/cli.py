@@ -8,7 +8,6 @@ import sys
 
 import vastly
 from vastly import __version__, cyan, dim, green, red
-from vastly.config import CONFIG_PATH, GIT_AUTH_MODES, ensure_config
 from vastly.commands import (
     cmd_config,
     cmd_connect,
@@ -20,8 +19,8 @@ from vastly.commands import (
     cmd_start,
     cmd_stop,
 )
+from vastly.config import CONFIG_PATH, GIT_AUTH_MODES, ensure_config
 from vastly.errors import VastlyError
-
 
 # ── Help system ─────────────────────────────────────────────────────
 

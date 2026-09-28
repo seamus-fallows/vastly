@@ -184,9 +184,7 @@ class TestRemoteSetup:
         result = setup_instances(
             [live_instance], repo_url, repo_name, config, force_setup=True
         )
-        assert live_instance.name in result, (
-            f"Setup failed for {live_instance.name}"
-        )
+        assert live_instance.name in result, f"Setup failed for {live_instance.name}"
 
     def test_marker_file_written(self, live_instance, test_repo):
         """After setup, the marker JSON should exist and be valid."""

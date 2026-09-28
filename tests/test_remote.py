@@ -9,8 +9,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import make_test_config
+from conftest import make_test_instance as _inst
 
-from conftest import make_test_config, make_test_instance as _inst
 from vastly.remote import _PROBE_SEP, setup_instances
 
 ROOT = Path(__file__).resolve().parent.parent

@@ -12,10 +12,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import make_test_config
+from conftest import make_test_instance as _inst
 
-from conftest import make_test_config, make_test_instance as _inst
 from vastly.errors import VastlyError
-
 
 _MINIMAL_CONFIG = make_test_config(portForwards=[])
 

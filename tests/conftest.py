@@ -7,7 +7,6 @@ import pytest
 from vastly.config import DEFAULTS
 from vastly.instance import Instance
 
-
 # ── Non-fixture helpers (usable without pytest fixtures) ─────────────
 
 

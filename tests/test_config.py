@@ -7,8 +7,8 @@ import shutil
 from pathlib import Path
 
 import pytest
-
 from conftest import make_test_config
+
 from vastly.config import (
     DEFAULTS,
     _detect_ide,

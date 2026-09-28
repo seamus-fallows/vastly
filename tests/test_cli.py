@@ -135,7 +135,9 @@ class TestLocalRepoInfo:
     def test_returns_none_on_empty_stdout(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **_kw: subprocess.CompletedProcess(a[0], 0, stdout="", stderr=""),
+            lambda *a, **_kw: subprocess.CompletedProcess(
+                a[0], 0, stdout="", stderr=""
+            ),
         )
         assert _local_repo_info("origin") is None
 

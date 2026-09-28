@@ -6,8 +6,9 @@ import json
 import subprocess
 
 import pytest
+from conftest import make_api_instance, make_test_config
+from conftest import make_test_instance as _inst
 
-from conftest import make_api_instance, make_test_config, make_test_instance as _inst
 from vastly.errors import APIError, VastlyError
 from vastly.instance import (
     Instance,
@@ -47,7 +48,9 @@ class TestFetchInstances:
     def test_raises_api_key_hint_when_stderr_empty(self, monkeypatch):
         monkeypatch.setattr(
             "subprocess.run",
-            lambda *a, **_kw: subprocess.CompletedProcess(a[0], 1, stdout="", stderr=""),
+            lambda *a, **_kw: subprocess.CompletedProcess(
+                a[0], 1, stdout="", stderr=""
+            ),
         )
         with pytest.raises(APIError, match="API key"):
             fetch_instances()

@@ -15,14 +15,14 @@ from pathlib import Path, PurePosixPath
 
 import vastly
 from vastly import __version__, cyan, dim, gitauth, green, red, yellow
-from vastly.config import CONFIG_PATH, Config, _PROJECT_KEYS, load_config
+from vastly.config import _PROJECT_KEYS, CONFIG_PATH, Config, load_config
 from vastly.errors import VastlyError
 from vastly.ide import check_ide, open_ide
 from vastly.instance import (
     NO_INSTANCES_MSG,
     STARTABLE_STATES,
-    STOPPED_STATES,
     STOPPABLE_STATES,
+    STOPPED_STATES,
     TRANSITIONAL_STATES,
     Instance,
     find_by_name,

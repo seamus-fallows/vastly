@@ -10,9 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import vastly
-from vastly import gitauth
+from vastly import dim, gitauth
 from vastly.config import Config
-from vastly import dim
 from vastly.errors import APIError, VastlyError
 from vastly.ssh import (
     SSH_CONFIG_DIR,

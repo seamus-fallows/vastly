@@ -8,11 +8,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import make_test_config
+from conftest import make_test_instance as _inst
 
-from conftest import make_test_config, make_test_instance as _inst
 from vastly.errors import VastlyError
 from vastly.instance import validate_alias
-
 
 # ── Shared helpers ───────────────────────────────────────────────────
 
@@ -261,8 +261,8 @@ class TestCmdStart:
         assert started == []  # Should not call vastai_start for loading state
 
     def test_timeout_raises(self, monkeypatch):
-        from vastly.commands import cmd_start
         import vastly.commands
+        from vastly.commands import cmd_start
 
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
@@ -292,8 +292,8 @@ class TestCmdStart:
             cmd_start(args)
 
     def test_queued_start_shows_waiting(self, monkeypatch, capsys):
-        from vastly.commands import cmd_start
         import vastly.commands
+        from vastly.commands import cmd_start
 
         monkeypatch.setattr("vastly.commands._git_root", lambda: None)
         monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
@@ -620,7 +620,6 @@ class TestCmdConfig:
         assert "project config:" in output
         assert "overrides global" in output
 
-
     def test_shows_git_auth_preview_in_repo(self, monkeypatch, capsys, tmp_path):
         from vastly.commands import cmd_config
 
@@ -839,7 +838,9 @@ class TestConnectStoppedInstance:
             "vastly.commands._vastai_start",
             lambda inst: (started_ids.append(inst.id), False)[1],
         )
-        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            "vastly.commands._poll_for_running", lambda *_a, **_kw: None
+        )
 
         args = argparse.Namespace(
             name=None,
@@ -1103,7 +1104,9 @@ class TestCmdStopIntegration:
             lambda action, inst: action_calls.append((action, inst)),
         )
 
-        args = argparse.Namespace(command="stop", name=None, all=False, yes=True, verbose=False)
+        args = argparse.Namespace(
+            command="stop", name=None, all=False, yes=True, verbose=False
+        )
         cmd_stop(args)
 
         assert len(action_calls) == 1
@@ -1437,7 +1440,9 @@ class TestStartAndResync:
         from vastly.commands import _start_and_resync
 
         monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
-        monkeypatch.setattr("vastly.commands._poll_for_running", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            "vastly.commands._poll_for_running", lambda *_a, **_kw: None
+        )
         monkeypatch.setattr(
             "vastly.commands.sync_instances",
             lambda config: [_inst(name="gpu", id=1, status="stopped")],

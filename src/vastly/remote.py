@@ -8,6 +8,7 @@ import subprocess
 import time
 from importlib import resources
 from pathlib import Path, PurePosixPath
+
 from vastly import __version__, cyan, dim, gitauth, green, red, yellow
 from vastly.config import Config
 from vastly.instance import Instance
