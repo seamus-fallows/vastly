@@ -8,7 +8,7 @@ import sys
 
 import vastly
 from vastly import __version__, cyan, dim, green, red
-from vastly.config import CONFIG_PATH, ensure_config
+from vastly.config import CONFIG_PATH, GIT_AUTH_MODES, ensure_config
 from vastly.commands import (
     cmd_config,
     cmd_connect,
@@ -28,7 +28,7 @@ from vastly.errors import VastlyError
 
 _CMD_HELP = {
     "connect": {
-        "usage": "vst [name] [-n | -f] [--all]",
+        "usage": "vst [name] [-n | -f] [--all] [--git-auth MODE]",
         "desc": "Connect to an instance and open your IDE.",
         "detail": "First visit: clones your repo, installs deps. Revisits: skips straight to IDE.",
         "examples": [
@@ -36,6 +36,7 @@ _CMD_HELP = {
             ("vst train", "connect by alias"),
             ("vst --all", "connect to all instances"),
             ("vst -f", "force re-run setup"),
+            ("vst --git-auth agent", "forward your SSH agent this time"),
         ],
     },
     "list": {
@@ -138,6 +139,7 @@ def _print_help() -> None:
     options = [
         ("-f, --force-setup", "re-run remote setup"),
         ("-n, --no-setup", "skip project setup (just open IDE)"),
+        ("--git-auth MODE", "agent, auto, or deploy-key (this run only)"),
         ("-v, --verbose", "verbose output"),
         ("-h, --help", "show help"),
         ("--version", "show version"),
@@ -211,6 +213,16 @@ def _ssh_vst_args(raw: list[str]) -> list[str]:
     return raw
 
 
+def _positionals(raw: list[str]) -> list[tuple[int, str]]:
+    """Return (index, arg) for non-flag args, skipping the MODE in `--git-auth MODE`."""
+    result = []
+    for i, arg in enumerate(raw):
+        if arg.startswith("-") or (i > 0 and raw[i - 1] == "--git-auth"):
+            continue
+        result.append((i, arg))
+    return result
+
+
 # ── Argument parser ─────────────────────────────────────────────────
 
 
@@ -233,6 +245,7 @@ def _build_parser() -> tuple[
     g_top = parser.add_mutually_exclusive_group()
     g_top.add_argument("-n", "--no-setup", action="store_true")
     g_top.add_argument("-f", "--force-setup", action="store_true")
+    parser.add_argument("--git-auth", choices=GIT_AUTH_MODES, metavar="MODE")
 
     subparsers = parser.add_subparsers(dest="command")
     parsers: dict[str, argparse.ArgumentParser] = {}
@@ -253,6 +266,14 @@ def _build_parser() -> tuple[
         "--force-setup",
         action="store_true",
         help="re-run setup even if already done",
+    )
+    # SUPPRESS keeps the top-level value when the flag comes before the name
+    p.add_argument(
+        "--git-auth",
+        choices=GIT_AUTH_MODES,
+        default=argparse.SUPPRESS,
+        metavar="MODE",
+        help="git access this run: agent, auto, or deploy-key",
     )
     parsers["connect"] = p
 
@@ -342,7 +363,8 @@ def main(argv: list[str] | None = None) -> None:
         print(dim("  \u2514 Edit ~/.vastly/config.json to customize.\n"))
 
     parser, parsers = _build_parser()
-    non_flags = [a for a in raw if not a.startswith("-")]
+    positionals = _positionals(raw)
+    non_flags = [a for _, a in positionals]
 
     # Handle help ourselves for clean, colored output. For ssh, a -h/--help
     # inside the remote command is passed through (see _ssh_vst_args).
@@ -362,8 +384,7 @@ def main(argv: list[str] | None = None) -> None:
     # e.g. `vst -v my-gpu` becomes `vst -v connect my-gpu`
     known = set(parsers.keys())
     if non_flags and non_flags[0] not in known:
-        idx = raw.index(non_flags[0])
-        raw.insert(idx, "connect")
+        raw.insert(positionals[0][0], "connect")
 
     args = parser.parse_args(raw)
 

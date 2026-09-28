@@ -90,6 +90,46 @@ class TestSyncInstances:
         monkeypatch.setattr("vastly.instance.prune_ssh_configs", lambda keep: None)
         monkeypatch.setattr("vastly.instance.write_ssh_config", lambda *_a, **_kw: None)
 
+    def _capture_ssh_writes(self, monkeypatch):
+        writes = {}
+        monkeypatch.setattr(
+            "vastly.instance.write_ssh_config",
+            lambda name, **kw: writes.__setitem__(name, kw),
+        )
+        return writes
+
+    @pytest.mark.parametrize(
+        "mode, expected", [("auto", False), ("deploy-key", False), ("agent", True)]
+    )
+    def test_forwarding_follows_deploy_key_state(self, monkeypatch, mode, expected):
+        from vastly import gitauth
+
+        gitauth.record_deploy_key(1, "o/r", 42, account=1)
+        writes = self._capture_ssh_writes(monkeypatch)
+        monkeypatch.setattr(
+            "vastly.instance.fetch_instances", lambda: [make_api_instance(1)]
+        )
+        sync_instances(make_test_config(gitAuth=mode))
+        assert writes["1xrtx4090-tw"]["forward_agent"] is expected
+
+    def test_unknown_instances_keep_forwarding(self, monkeypatch):
+        writes = self._capture_ssh_writes(monkeypatch)
+        monkeypatch.setattr(
+            "vastly.instance.fetch_instances", lambda: [make_api_instance(1)]
+        )
+        sync_instances(make_test_config(gitAuth="auto"))
+        assert writes["1xrtx4090-tw"]["forward_agent"] is True
+
+    def test_forgets_git_auth_state_of_missing_instances(self, monkeypatch):
+        from vastly import gitauth
+
+        gitauth.record_agent(5, account=None)
+        monkeypatch.setattr(
+            "vastly.instance.fetch_instances", lambda: [make_api_instance(1)]
+        )
+        sync_instances(make_test_config())
+        assert "5" not in gitauth.load_state()
+
     def test_syncs_running_instances(self, monkeypatch):
         monkeypatch.setattr(
             "vastly.instance.fetch_instances", lambda: [make_api_instance(1)]

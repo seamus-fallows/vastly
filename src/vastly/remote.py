@@ -8,10 +8,10 @@ import subprocess
 import time
 from importlib import resources
 from pathlib import Path, PurePosixPath
-from vastly import __version__, cyan, green, red, yellow
+from vastly import __version__, cyan, dim, gitauth, green, red, yellow
 from vastly.config import Config
 from vastly.instance import Instance
-from vastly.ssh import run_scp, run_ssh
+from vastly.ssh import run_scp, run_ssh, set_forward_agent
 
 # These paths must match setup-remote.sh -- keep in sync
 REMOTE_MARKER_DIR = "~/.vastly/setup"
@@ -32,6 +32,25 @@ def _check_repo_mismatch(repo_name: str, setup_files: list[str]) -> list[str]:
         for f in setup_files
         if f.endswith(".json") and f.removesuffix(".json") != repo_name
     ]
+
+
+def _add_deploy_key(
+    inst: Instance, repo: str, repo_name: str, account: int | None
+) -> str | None:
+    """Create a deploy key on *inst* and register it on *repo*.
+
+    Returns None on success, or a short reason it didn't work.
+    """
+    try:
+        public_key = gitauth.ensure_instance_key(inst.name, repo_name, inst.id)
+    except gitauth.GitHubError as e:
+        return str(e)
+    try:
+        key_id = gitauth.add_deploy_key(repo, gitauth.key_title(inst.id), public_key)
+    except gitauth.GitHubError as e:
+        return f"GitHub rejected the key ({e})"
+    gitauth.record_deploy_key(inst.id, repo, key_id, account)
+    return None
 
 
 def setup_instances(
@@ -62,6 +81,14 @@ def setup_instances(
 
     quoted_name = shlex.quote(repo_name)
     https_warned = False
+
+    # Git access (see gitauth.py). Whether a deploy key is possible for this
+    # repo is checked once, and only if some instance actually needs setup.
+    mode = config["gitAuth"]
+    github = gitauth.github_repo(repo_url)
+    blocker: str | None = None
+    blocker_checked = False
+    account: int | None = None
 
     for inst in instances:
         name = inst.name
@@ -143,20 +170,6 @@ def setup_instances(
                 print(f"  {label}: skipped.")
                 continue
 
-        # Warn about HTTPS limitation (once)
-        if not https_warned and repo_url.startswith("https://"):
-            https_warned = True
-            clean_url = repo_url.rstrip("/")
-            suggestion = clean_url.replace("https://", "git@", 1).replace("/", ":", 1)
-            fix_url = suggestion if suggestion.endswith(".git") else suggestion + ".git"
-            print(
-                yellow(
-                    f"\n  Note: HTTPS remote -- pushing won't work from the instance\n"
-                    f"  (credentials can't be forwarded). To fix:\n"
-                    f"    git remote set-url {config['gitRemote']} {fix_url}\n"
-                )
-            )
-
         # Fetch git identity lazily -- only when setup is actually needed.
         # No --global: use the identity that applies to this repo (repo-local
         # config and includeIf rules win over the global one).
@@ -185,6 +198,49 @@ def setup_instances(
 
         print(cyan("running setup..."))
 
+        # Per-repo deploy key where possible; otherwise SSH agent forwarding
+        use_key = False
+        if mode != "agent":
+            if not blocker_checked:
+                blocker_checked = True
+                blocker = gitauth.deploy_key_blocker(github)
+                if blocker is None:
+                    account = gitauth.account_id()
+            problem = blocker or _add_deploy_key(inst, github, repo_name, account)
+            if problem is None:
+                use_key = True
+                print(dim(f"  {label}: using a deploy key for {github}"))
+            elif mode == "deploy-key":
+                print(red(f"  {label}: can't use a deploy key -- {problem}."))
+                print(
+                    red(
+                        "  Fix that, or run 'vst --git-auth agent' to forward "
+                        "your SSH agent instead."
+                    )
+                )
+                continue
+            else:
+                print(yellow(f"  {label}: using SSH agent forwarding -- {problem}."))
+
+        # Remember when this repo relies on forwarding, so a later deploy-key mode
+        # doesn't switch it off. Pure agent-mode users never get a state entry.
+        if not use_key and (mode != "agent" or gitauth.is_tracked(inst.id)):
+            gitauth.record_agent(inst.id, account)
+
+        # Warn about HTTPS limitation (once). Deploy keys always use SSH.
+        if not use_key and not https_warned and repo_url.startswith("https://"):
+            https_warned = True
+            clean_url = repo_url.rstrip("/")
+            suggestion = clean_url.replace("https://", "git@", 1).replace("/", ":", 1)
+            fix_url = suggestion if suggestion.endswith(".git") else suggestion + ".git"
+            print(
+                yellow(
+                    f"\n  Note: HTTPS remote -- pushing won't work from the instance\n"
+                    f"  (credentials can't be forwarded). To fix:\n"
+                    f"    git remote set-url {config['gitRemote']} {fix_url}\n"
+                )
+            )
+
         scp_result = run_scp(
             str(setup_script), f"{name}:/tmp/_vastly-setup.sh", setup=True
         )
@@ -193,7 +249,7 @@ def setup_instances(
             continue
 
         setup_args = [
-            repo_url,
+            gitauth.ssh_url(github) if use_key else repo_url,
             repo_name,
             git_name,
             git_email,
@@ -201,6 +257,7 @@ def setup_instances(
             disable_tmux,
             install_cmd,
             __version__,
+            "deploy-key" if use_key else "agent",
         ] + config["postInstall"]
 
         quoted = " ".join(shlex.quote(a) for a in setup_args)
@@ -216,6 +273,13 @@ def setup_instances(
         if result.returncode != 0:
             print(red(f"  {label}: setup failed (exit {result.returncode})"))
             continue
+
+        # Agent forwarding is only needed if some repo on this instance uses it
+        if mode != "agent":
+            forward = gitauth.forward_agent(inst.id, mode)
+            for host in (inst.name, inst.alias):
+                if host:
+                    set_forward_agent(host, forward)
 
         # Copy non-git-tracked files to the remote instance
         copy_files = config["copyFiles"]

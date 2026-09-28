@@ -1,4 +1,4 @@
-"""Load and manage ~/.vastly.json configuration."""
+"""Load and manage ~/.vastly/config.json configuration."""
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ class Config(TypedDict):
     postInstall: list[str]
     installCommand: str | None
     copyFiles: list[str]
+    gitAuth: str
 
 
 CONFIG_DIR = Path.home() / ".vastly"
@@ -47,9 +48,14 @@ DEFAULTS = {
     "postInstall": [],
     "installCommand": None,
     "copyFiles": [],
+    "gitAuth": "agent",
 }
 
-_STRING_KEYS = frozenset({"ide", "sshUser", "workspace", "gitRemote"})
+# How instances get git access: forward your SSH agent, use a per-repo GitHub
+# deploy key where possible, or require a deploy key (see gitauth.py)
+GIT_AUTH_MODES = ("agent", "auto", "deploy-key")
+
+_STRING_KEYS = frozenset({"ide", "sshUser", "workspace", "gitRemote", "gitAuth"})
 
 
 def _ensure_list(config: dict, key: str) -> None:
@@ -122,13 +128,19 @@ def _validate_config(config: Config) -> None:
     Raises ConfigError with a clear message on the first problem found.
     """
     # --- non-empty string keys ---
-    for key in ("ide", "sshUser", "workspace", "gitRemote"):
+    for key in ("ide", "sshUser", "workspace", "gitRemote", "gitAuth"):
         val = config.get(key)
         if not isinstance(val, str) or not val:
             raise ConfigError(
                 f"Invalid config: '{key}' must be a non-empty string, "
                 f"got {type(val).__name__}"
             )
+
+    if config["gitAuth"] not in GIT_AUTH_MODES:
+        raise ConfigError(
+            f"Invalid config: 'gitAuth' must be one of {', '.join(GIT_AUTH_MODES)}, "
+            f"got {config['gitAuth']!r}"
+        )
 
     # workspace must start with /
     if not config["workspace"].startswith("/"):
@@ -238,8 +250,8 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
     If ``project_dir`` is given and contains a ``.vastly.json``, project-specific
     keys (postInstall, installCommand, workspace, portForwards, copyFiles,
     gitRemote) are overlaid on the global config.  User-specific keys (ide,
-    sshKeyPath, sshUser, disableAutoTmux) in a project config are silently
-    ignored.
+    sshKeyPath, sshUser, disableAutoTmux, gitAuth) in a project config are
+    silently ignored -- a repo must not be able to turn on agent forwarding.
     """
     path = path or CONFIG_PATH
 

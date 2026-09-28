@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,12 @@ from vastly.remote import _PROBE_SEP, setup_instances
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "vastly"
 DATA = SRC / "data"
+
+
+def _setup_args(remote_cmd: str) -> list[str]:
+    """Positional args passed to setup-remote.sh in a setup SSH command."""
+    quoted = remote_cmd.split("bash /tmp/_vastly-setup.sh ", 1)[1].split("; e=$?", 1)[0]
+    return shlex.split(quoted)
 
 
 class TestSetupInstances:
@@ -86,6 +93,7 @@ class TestSetupInstances:
             "installCommand": None,
             "postInstall": [],
             "copyFiles": [],
+            "gitAuth": "agent",
         }
 
     def test_successful_setup(self, monkeypatch):
@@ -259,6 +267,156 @@ class TestSetupInstances:
         config = {**self._base_config(), "disableAutoTmux": False}
         setup_instances([_inst("gpu-1")], "git@github.com:u/r.git", "r", config)
         assert "false" in setup_cmds[0]
+
+    # ── Git access (gitAuth) ──
+
+    def _run_git_auth_setup(
+        self,
+        monkeypatch,
+        mode,
+        *,
+        repo_url="git@github.com:u/r.git",
+        blocker=None,
+        add_error=None,
+        instances=None,
+    ):
+        """Run setup with gitAuth=*mode*. Returns (result, setup args, forward calls)."""
+        from vastly import gitauth
+
+        setup_cmds = []
+        base_mock = self._make_ssh_mock()
+
+        def recording_ssh(host, command, **kwargs):
+            if "bash /tmp/" in command:
+                setup_cmds.append(command)
+            return base_mock(host, command, **kwargs)
+
+        def fake_add(repo, title, key):
+            if add_error:
+                raise gitauth.GitHubError(add_error)
+            return 42
+
+        forwards = []
+        monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
+        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        self.blocker_calls = []
+        monkeypatch.setattr(
+            "vastly.gitauth.deploy_key_blocker",
+            lambda repo: self.blocker_calls.append(repo) or blocker,
+        )
+        monkeypatch.setattr("vastly.gitauth.account_id", lambda: 99)
+        monkeypatch.setattr(
+            "vastly.gitauth.ensure_instance_key",
+            lambda host, name, inst_id: "ssh-ed25519 AAAA vastly-1",
+        )
+        monkeypatch.setattr("vastly.gitauth.add_deploy_key", fake_add)
+        monkeypatch.setattr(
+            "vastly.remote.set_forward_agent",
+            lambda host, enabled: forwards.append((host, enabled)),
+        )
+        config = {**self._base_config(), "gitAuth": mode}
+        result = setup_instances(instances or [_inst("gpu-1")], repo_url, "r", config)
+        args = [_setup_args(cmd) for cmd in setup_cmds]
+        return result, args, forwards
+
+    def test_agent_mode_skips_github_checks(self, monkeypatch):
+        def unexpected(repo):
+            raise AssertionError("deploy_key_blocker called in agent mode")
+
+        monkeypatch.setattr("vastly.gitauth.deploy_key_blocker", unexpected)
+        setup_cmds = []
+        base_mock = self._make_ssh_mock()
+
+        def recording_ssh(host, command, **kwargs):
+            if "bash /tmp/" in command:
+                setup_cmds.append(command)
+            return base_mock(host, command, **kwargs)
+
+        monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
+        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        result = setup_instances(
+            [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
+        )
+        assert result == ["gpu-1"]
+        assert _setup_args(setup_cmds[0])[8] == "agent"
+
+    def test_auto_uses_deploy_key_when_possible(self, monkeypatch, capsys):
+        from vastly import gitauth
+
+        result, args, forwards = self._run_git_auth_setup(monkeypatch, "auto")
+
+        assert result == ["gpu-1"]
+        assert args[0][0] == "git@github.com:u/r.git"
+        assert args[0][8] == "deploy-key"
+        assert gitauth.load_state()["1"] == {
+            "agent": False,
+            "keys": [{"repo": "u/r", "id": 42}],
+            "account": 99,
+        }
+        assert forwards == [("gpu-1", False)]
+        assert "using a deploy key for u/r" in capsys.readouterr().out
+
+    def test_deploy_key_clones_https_remote_over_ssh(self, monkeypatch, capsys):
+        _, args, _ = self._run_git_auth_setup(
+            monkeypatch, "auto", repo_url="https://github.com/u/r"
+        )
+        assert args[0][0] == "git@github.com:u/r.git"
+        assert "HTTPS remote" not in capsys.readouterr().out
+
+    def test_auto_falls_back_to_agent_when_not_admin(self, monkeypatch, capsys):
+        from vastly import gitauth
+
+        result, args, forwards = self._run_git_auth_setup(
+            monkeypatch, "auto", blocker="you're not an admin of u/r"
+        )
+
+        assert result == ["gpu-1"]
+        assert args[0][0] == "git@github.com:u/r.git"
+        assert args[0][8] == "agent"
+        assert gitauth.load_state()["1"]["agent"] is True
+        assert forwards == [("gpu-1", True)]
+        out = capsys.readouterr().out
+        assert "using SSH agent forwarding -- you're not an admin of u/r" in out
+
+    def test_auto_falls_back_when_github_rejects_key(self, monkeypatch, capsys):
+        _, args, _ = self._run_git_auth_setup(
+            monkeypatch, "auto", add_error="Deploy keys are disabled (HTTP 422)"
+        )
+        assert args[0][8] == "agent"
+        assert "GitHub rejected the key" in capsys.readouterr().out
+
+    def test_deploy_key_mode_stops_when_not_possible(self, monkeypatch, capsys):
+        result, args, _ = self._run_git_auth_setup(
+            monkeypatch, "deploy-key", blocker="you're not an admin of u/r"
+        )
+        assert result == []
+        assert args == []  # setup script never ran
+        out = capsys.readouterr().out
+        assert "can't use a deploy key -- you're not an admin of u/r" in out
+        assert "--git-auth agent" in out
+
+    def test_agent_run_on_deploy_key_instance_keeps_forwarding(self, monkeypatch):
+        """vst -f --git-auth agent on a deploy-key instance: later auto runs forward."""
+        from vastly import gitauth
+
+        gitauth.record_deploy_key(1, "u/r", 42, account=99)
+        _, args, _ = self._run_git_auth_setup(monkeypatch, "agent")
+        assert args[0][8] == "agent"
+        assert gitauth.forward_agent(1, "auto") is True
+
+    def test_agent_mode_creates_no_state(self, monkeypatch):
+        from vastly import gitauth
+
+        self._run_git_auth_setup(monkeypatch, "agent")
+        assert gitauth.load_state() == {}
+
+    def test_deploy_key_possibility_checked_once(self, monkeypatch):
+        result, args, _ = self._run_git_auth_setup(
+            monkeypatch, "auto", instances=[_inst("gpu-1", 1), _inst("gpu-2", 2)]
+        )
+        assert result == ["gpu-1", "gpu-2"]
+        assert [a[8] for a in args] == ["deploy-key", "deploy-key"]
+        assert self.blocker_calls == ["u/r"]
 
 
 # ── TestSetupRemoteScript ────────────────────────────────────────────

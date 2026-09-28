@@ -14,7 +14,7 @@ from difflib import get_close_matches
 from pathlib import Path, PurePosixPath
 
 import vastly
-from vastly import __version__, cyan, dim, green, red, yellow
+from vastly import __version__, cyan, dim, gitauth, green, red, yellow
 from vastly.config import CONFIG_PATH, Config, _PROJECT_KEYS, load_config
 from vastly.errors import VastlyError
 from vastly.ide import check_ide, open_ide
@@ -201,8 +201,9 @@ def _vast_account() -> str:
 
 
 def _vastai_destroy(inst: Instance) -> None:
-    """Destroy an instance and clean up its SSH config and alias."""
+    """Destroy an instance and clean up its SSH config, alias, and deploy keys."""
     _vastai_action("destroy", inst)
+    gitauth.remove_instance_keys(inst.id)
 
     # Clean up SSH config for the destroyed instance
     config_file = SSH_CONFIG_DIR / inst.name
@@ -350,10 +351,13 @@ def _do_connect(
     select_all: bool = False,
     no_setup: bool = False,
     force_setup: bool = False,
+    git_auth: str | None = None,
 ) -> None:
     """Core connect flow: sync instances, run setup, open IDE."""
     git_root = _git_root()
     config = load_config(project_dir=git_root)
+    if git_auth:
+        config["gitAuth"] = git_auth  # one-run override (vst --git-auth MODE)
 
     config["ide"] = _check_prerequisites(need_ide=True, ide=config["ide"])
 
@@ -454,7 +458,7 @@ def _do_connect(
             except VastlyError:
                 return
             _start_and_resync(to_start, config)
-            _do_connect(name=to_start[0].alias or to_start[0].name)
+            _do_connect(name=to_start[0].alias or to_start[0].name, git_auth=git_auth)
             return
 
     # Only check for updates after successful connect
@@ -470,6 +474,7 @@ def cmd_connect(args: argparse.Namespace) -> None:
         select_all=args.all,
         no_setup=args.no_setup,
         force_setup=args.force_setup,
+        git_auth=getattr(args, "git_auth", None),
     )
 
 
@@ -748,6 +753,18 @@ def cmd_start(args: argparse.Namespace) -> None:
     _do_connect(name=selected[0].alias or selected[0].name)
 
 
+def _git_auth_preview(config: Config) -> str:
+    """Describe how new setups of the current repo will get git access."""
+    repo_info = _local_repo_info(config["gitRemote"])
+    repo = gitauth.github_repo(repo_info[0]) if repo_info else None
+    blocker = gitauth.deploy_key_blocker(repo)
+    if blocker is None:
+        return f"deploy key (you're an admin of {repo})"
+    if config["gitAuth"] == "deploy-key":
+        return f"setup will stop -- {blocker}"
+    return f"SSH agent forwarding -- {blocker}"
+
+
 def cmd_config(args: argparse.Namespace) -> None:
     """Show resolved configuration."""
 
@@ -767,6 +784,7 @@ def cmd_config(args: argparse.Namespace) -> None:
         ("postInstall", "commands to run after setup"),
         ("installCommand", "override dependency install"),
         ("copyFiles", "files to copy after setup"),
+        ("gitAuth", "git access on instances (agent, auto, deploy-key)"),
     ]
 
     def fmt(key: str, val) -> str:
@@ -793,6 +811,9 @@ def cmd_config(args: argparse.Namespace) -> None:
 
     # Which account vastai's saved API key belongs to (personal vs team matters)
     print(f"\n{cyan('vast account:')} {_vast_account()}")
+
+    if git_root and config["gitAuth"] != "agent":
+        print(f"{cyan('git auth (this repo):')} {_git_auth_preview(config)}")
 
     # Project config overlay
     if git_root:

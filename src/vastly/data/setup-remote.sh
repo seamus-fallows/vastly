@@ -11,7 +11,7 @@ set -euo pipefail
 
 # ── Arguments ───────────────────────────────────────────────────────────
 
-REPO_URL="${1:?Usage: setup-remote.sh <repo_url> <repo_name> <git_name> <git_email> <workspace> <disable_auto_tmux> <install_command> <module_version> [post_install_commands...]}"
+REPO_URL="${1:?Usage: setup-remote.sh <repo_url> <repo_name> <git_name> <git_email> <workspace> <disable_auto_tmux> <install_command> <module_version> <git_auth> [post_install_commands...]}"
 REPO_NAME="${2:?Missing repo_name}"
 GIT_NAME="${3:?Missing git_name}"
 GIT_EMAIL="${4:?Missing git_email}"
@@ -19,7 +19,8 @@ WORKSPACE="${5:?Missing workspace}"
 DISABLE_AUTO_TMUX="${6:?Missing disable_auto_tmux}"
 INSTALL_COMMAND="${7:?Missing install_command}"
 MODULE_VERSION="${8:?Missing module_version}"
-shift 8
+GIT_AUTH="${9:?Missing git_auth}"  # "agent" or "deploy-key"
+shift 9
 POST_INSTALL_COMMANDS=("$@")
 
 REPO_DIR="${WORKSPACE}/${REPO_NAME}"
@@ -57,6 +58,18 @@ log "Configuring git identity: ${GIT_NAME} <${GIT_EMAIL}>"
 git config --global user.name "$GIT_NAME"
 git config --global user.email "$GIT_EMAIL"
 
+# ── Step 2b: Git access ────────────────────────────────────────────────
+
+# With a deploy key, git uses only that repo's key (created by vastly before
+# this script runs), never a forwarded agent. The path must match
+# src/vastly/gitauth.py -- keep in sync.
+DEPLOY_KEY="$HOME/.ssh/vastly-${REPO_NAME}"
+if [[ "$GIT_AUTH" == "deploy-key" ]]; then
+    [[ -f "$DEPLOY_KEY" ]] || die "Deploy key ${DEPLOY_KEY} not found"
+    log "Using deploy key ${DEPLOY_KEY} for git"
+    export GIT_SSH_COMMAND="ssh -i ${DEPLOY_KEY} -o IdentitiesOnly=yes"
+fi
+
 # ── Step 3: Git host known keys ───────────────────────────────────────
 
 if [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
@@ -79,7 +92,10 @@ fi
 
 log "Verifying access to ${REPO_URL}..."
 if ! git ls-remote "$REPO_URL" HEAD &>/dev/null; then
-    if [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
+    if [[ "$GIT_AUTH" == "deploy-key" ]]; then
+        die "Cannot access repo with the deploy key ${DEPLOY_KEY}.
+  Re-run with vst -f, or use vst --git-auth agent to forward your SSH agent instead."
+    elif [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
         die "Cannot access repo via SSH. Agent forwarding may not be working.
   Check that your SSH agent is running (ssh-add -l) and your key is loaded (ssh-add)."
     else
@@ -90,17 +106,29 @@ fi
 
 # ── Step 5: Clone ──────────────────────────────────────────────────────
 
+# Make git commands in the repo (pull, push) use the same access as setup
+set_repo_git_access() {
+    if [[ "$GIT_AUTH" == "deploy-key" ]]; then
+        git config core.sshCommand "$GIT_SSH_COMMAND"
+    elif [[ "$(git config --get core.sshCommand || true)" == *"/.ssh/vastly-"* ]]; then
+        log "Switching git back to SSH agent forwarding"
+        git config --unset core.sshCommand
+    fi
+}
+
 mkdir -p "$WORKSPACE"
 cd "$WORKSPACE"
 
 if [[ -d "$REPO_NAME" ]]; then
     log "Repo already exists, pulling latest changes"
     cd "$REPO_NAME"
+    set_repo_git_access
     git pull --ff-only 2>&1 || warn "git pull failed -- continuing with existing code"
 else
     log "Cloning ${REPO_URL} into ${REPO_DIR}"
     git clone "$REPO_URL" "$REPO_NAME" || die "git clone failed"
     cd "$REPO_NAME"
+    set_repo_git_access
 fi
 
 # ── Step 6: Python environment detection ────────────────────────────────
@@ -294,7 +322,8 @@ cat > "${MARKER_DIR}/${REPO_NAME}.json" << MARKEREOF
     "repoUrl": "${REPO_URL_ESCAPED}",
     "timestamp": "${TIMESTAMP}",
     "installMethod": "${INSTALL_METHOD_ESCAPED}",
-    "moduleVersion": "${MODULE_VERSION}"
+    "moduleVersion": "${MODULE_VERSION}",
+    "gitAuth": "${GIT_AUTH}"
 }
 MARKEREOF
 

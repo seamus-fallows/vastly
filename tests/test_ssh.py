@@ -14,6 +14,7 @@ from vastly.ssh import (
     ensure_ssh_include,
     find_available_port,
     is_port_available,
+    set_forward_agent,
     write_ssh_config,
 )
 
@@ -45,6 +46,38 @@ class TestPortHelpers:
             find_available_port(65536)
 
 
+class TestSetForwardAgent:
+    def _write(self, tmp_path, monkeypatch, name="gpu"):
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
+        write_ssh_config(
+            name,
+            host="10.0.0.1",
+            port=22,
+            user="root",
+            key_path=None,
+            local_forwards=[],
+        )
+        return tmp_path / name
+
+    def test_turns_forwarding_off_and_on(self, tmp_path, monkeypatch):
+        path = self._write(tmp_path, monkeypatch)
+        set_forward_agent("gpu", False)
+        assert "    ForwardAgent no" in path.read_text()
+        set_forward_agent("gpu", True)
+        assert "    ForwardAgent yes" in path.read_text()
+
+    def test_leaves_non_vastly_files_alone(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
+        path = tmp_path / "mine"
+        path.write_text("Host mine\n    ForwardAgent yes\n")
+        set_forward_agent("mine", False)
+        assert "ForwardAgent yes" in path.read_text()
+
+    def test_missing_file_is_a_no_op(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
+        set_forward_agent("nope", False)
+
+
 class TestSshConfig:
     def test_generates_valid_config(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
@@ -68,6 +101,21 @@ class TestSshConfig:
         assert "StrictHostKeyChecking no" in content
         expected_null = "NUL" if sys.platform == "win32" else "/dev/null"
         assert f"UserKnownHostsFile {expected_null}" in content
+
+    def test_forward_agent_can_be_disabled(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
+        write_ssh_config(
+            "gpu",
+            host="10.0.0.1",
+            port=22,
+            user="root",
+            key_path=None,
+            local_forwards=[],
+            forward_agent=False,
+        )
+        content = (tmp_path / "gpu").read_text()
+        assert "ForwardAgent no" in content
+        assert "ForwardAgent yes" not in content
 
     def test_includes_identity_file(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)

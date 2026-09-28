@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import vastly
+from vastly import gitauth
 from vastly.config import Config
 from vastly import dim
 from vastly.errors import APIError, VastlyError
@@ -209,6 +210,7 @@ def sync_instances(config: Config) -> list[Instance]:
     seen: set[str] = set()
     used_ports: set[int] = set()
     results: list[Instance] = []
+    auth_state = gitauth.load_state()
     # SSH config params for running instances, keyed by instance ID.
     # Used later to write alias configs without leaking internal data onto Instance.
     ssh_params: dict[int, dict] = {}
@@ -243,6 +245,7 @@ def sync_instances(config: Config) -> list[Instance]:
             used_ports.add(local_port)
             local_forwards.append((local_port, int(pf["remote"])))
 
+        forward_agent = gitauth.forward_agent(inst["id"], config["gitAuth"], auth_state)
         write_ssh_config(
             name,
             host=inst["public_ipaddr"],
@@ -250,6 +253,7 @@ def sync_instances(config: Config) -> list[Instance]:
             user=config["sshUser"],
             key_path=config["sshKeyPath"],
             local_forwards=local_forwards,
+            forward_agent=forward_agent,
         )
 
         ssh_params[inst["id"]] = {
@@ -258,6 +262,7 @@ def sync_instances(config: Config) -> list[Instance]:
             "user": config["sshUser"],
             "key_path": config["sshKeyPath"],
             "local_forwards": local_forwards,
+            "forward_agent": forward_agent,
         }
 
         results.append(
@@ -297,6 +302,10 @@ def sync_instances(config: Config) -> list[Instance]:
             del aliases[k]
         save_aliases(aliases)
 
+    # Remove deploy keys of instances that no longer exist (e.g. destroyed on
+    # the Vast.ai website). No-op unless vastly has state for a missing instance.
+    gitauth.prune(all_api_ids)
+
     # Write alias SSH configs (running only) and attach aliases to all instances
     for r in results:
         inst_id = str(r.id)
@@ -312,6 +321,7 @@ def sync_instances(config: Config) -> list[Instance]:
                     user=params["user"],
                     key_path=params["key_path"],
                     local_forwards=params["local_forwards"],
+                    forward_agent=params["forward_agent"],
                 )
 
     # Prune stale SSH configs (ones we didn't just write)

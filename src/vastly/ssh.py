@@ -95,6 +95,7 @@ def write_ssh_config(
     user: str,
     key_path: str | None,
     local_forwards: list[tuple[int, int]],
+    forward_agent: bool = True,
 ) -> None:
     """Write a single SSH config file to ~/.ssh/vast.d/<name>."""
     SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -102,12 +103,13 @@ def write_ssh_config(
     lines = [
         _GENERATED_HEADER,
         "# Vast.ai instances are ephemeral with recycled IPs, so host key",
-        "# verification is disabled. Agent forwarding enables git clone via SSH.",
+        "# verification is disabled. Agent forwarding lets git on the instance use",
+        "# your local SSH key; it's off when the instance uses a deploy key instead.",
         f"Host {name}",
         f"    HostName {host}",
         f"    Port {port}",
         f"    User {user}",
-        "    ForwardAgent yes",
+        f"    ForwardAgent {'yes' if forward_agent else 'no'}",
         "    StrictHostKeyChecking no",
         f"    UserKnownHostsFile {'NUL' if sys.platform == 'win32' else '/dev/null'}",
         "    LogLevel ERROR",
@@ -121,6 +123,22 @@ def write_ssh_config(
 
     config_file = SSH_CONFIG_DIR / name
     _atomic_write(config_file, "\n".join(lines) + "\n")
+
+
+def set_forward_agent(name: str, enabled: bool) -> None:
+    """Turn agent forwarding on/off in an existing vastly-generated SSH config."""
+    config_file = SSH_CONFIG_DIR / name
+    if not config_file.exists():
+        return
+    content = config_file.read_text(encoding="utf-8")
+    if not content.startswith(_GENERATED_HEADER):
+        return
+    value = "yes" if enabled else "no"
+    updated = re.sub(
+        r"(?m)^([ \t]*)ForwardAgent[ \t]+\S+$", rf"\g<1>ForwardAgent {value}", content
+    )
+    if updated != content:
+        _atomic_write(config_file, updated)
 
 
 def clear_ssh_configs() -> None:

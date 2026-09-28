@@ -224,6 +224,41 @@ class TestMainArgParsing:
         assert vastly.VERBOSE is True
 
 
+class TestGitAuthFlag:
+    """`--git-auth MODE` overrides gitAuth for one connect, before or after the name."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self, tmp_path, monkeypatch):
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
+
+    @pytest.mark.parametrize(
+        "argv, name, mode",
+        [
+            (["--git-auth", "agent"], None, "agent"),
+            (["--git-auth=auto"], None, "auto"),
+            (["my-gpu", "--git-auth", "deploy-key"], "my-gpu", "deploy-key"),
+            (["--git-auth", "agent", "my-gpu"], "my-gpu", "agent"),
+            (["-f", "--git-auth", "agent", "connect", "my-gpu"], "my-gpu", "agent"),
+            (["my-gpu"], "my-gpu", None),
+        ],
+    )
+    def test_parses(self, argv, name, mode):
+        with patch("vastly.cli.cmd_connect") as mock:
+            main(argv=argv)
+        args = mock.call_args[0][0]
+        assert args.name == name
+        assert getattr(args, "git_auth", None) == mode
+
+    def test_rejects_unknown_mode(self):
+        with patch("vastly.cli.cmd_connect") as mock:
+            with pytest.raises(SystemExit) as exc_info:
+                main(argv=["--git-auth", "token"])
+        assert exc_info.value.code == 2
+        mock.assert_not_called()
+
+
 class TestSshHelpPassthrough:
     """`vst ssh` passes -h/--help after the first positional to the remote command."""
 

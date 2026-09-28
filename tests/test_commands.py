@@ -621,6 +621,75 @@ class TestCmdConfig:
         assert "overrides global" in output
 
 
+    def test_shows_git_auth_preview_in_repo(self, monkeypatch, capsys, tmp_path):
+        from vastly.commands import cmd_config
+
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("vastly.commands._git_root", lambda: tmp_path)
+        monkeypatch.setattr(
+            "vastly.commands.load_config",
+            lambda **kw: {**_MINIMAL_CONFIG, "gitAuth": "auto"},
+        )
+        monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
+        monkeypatch.setattr(
+            "vastly.commands._git_auth_preview", lambda config: "deploy key (preview)"
+        )
+
+        cmd_config(argparse.Namespace(verbose=False))
+
+        assert "git auth (this repo): deploy key (preview)" in capsys.readouterr().out
+
+    def test_no_git_auth_preview_in_agent_mode(self, monkeypatch, capsys, tmp_path):
+        from vastly.commands import cmd_config
+
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("vastly.commands._git_root", lambda: tmp_path)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
+
+        cmd_config(argparse.Namespace(verbose=False))
+
+        assert "git auth (this repo)" not in capsys.readouterr().out
+
+
+class TestGitAuthPreview:
+    @pytest.mark.parametrize(
+        "mode, blocker, expected",
+        [
+            ("auto", None, "deploy key (you're an admin of o/r)"),
+            (
+                "auto",
+                "you're not an admin of o/r",
+                "SSH agent forwarding -- you're not",
+            ),
+            (
+                "deploy-key",
+                "you're not an admin of o/r",
+                "setup will stop -- you're not",
+            ),
+        ],
+    )
+    def test_preview(self, monkeypatch, mode, blocker, expected):
+        from vastly.commands import _git_auth_preview
+
+        monkeypatch.setattr(
+            "vastly.commands._local_repo_info",
+            lambda remote: ("git@github.com:o/r.git", "r"),
+        )
+        checked = []
+        monkeypatch.setattr(
+            "vastly.commands.gitauth.deploy_key_blocker",
+            lambda repo: checked.append(repo) or blocker,
+        )
+
+        assert _git_auth_preview({**_MINIMAL_CONFIG, "gitAuth": mode}).startswith(
+            expected
+        )
+        assert checked == ["o/r"]
+
+
 # ── TestVastAccount ──────────────────────────────────────────────────
 
 
@@ -1613,6 +1682,24 @@ class TestVastaiDestroyCleanup:
         # Instance with no alias and no existing SSH config -- should not error
         inst = _inst(name="gpu-box", id=42)
         _vastai_destroy(inst)  # should complete without error
+
+    def test_removes_deploy_keys(self, monkeypatch, tmp_path):
+        from vastly.commands import _vastai_destroy
+
+        monkeypatch.setattr("vastly.commands.SSH_CONFIG_DIR", tmp_path)
+        monkeypatch.setattr("vastly.instance._ALIASES_FILE", tmp_path / "aliases.json")
+        monkeypatch.setattr(
+            "vastly.commands.subprocess.run",
+            lambda *_a, **_kw: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+        )
+        removed = []
+        monkeypatch.setattr(
+            "vastly.commands.gitauth.remove_instance_keys", removed.append
+        )
+
+        _vastai_destroy(_inst(name="gpu-box", id=42))
+
+        assert removed == [42]
 
 
 # ── TestCmdSshSmartDispatch ──────────────────────────────────────────

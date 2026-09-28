@@ -51,6 +51,22 @@ def make_api_instance(
     return base
 
 
+@pytest.fixture(autouse=True)
+def _isolate_gitauth(tmp_path, monkeypatch):
+    """Keep every test away from real deploy keys.
+
+    Deploy key state goes to a temp file, and any GitHub CLI or account
+    lookup a test hasn't explicitly mocked fails loudly instead of running.
+    """
+
+    def _unmocked(*_args, **_kwargs):
+        raise AssertionError("unmocked GitHub CLI / Vast.ai account call in a test")
+
+    monkeypatch.setattr("vastly.gitauth.STATE_FILE", tmp_path / "deploy-keys.json")
+    monkeypatch.setattr("vastly.gitauth._gh", _unmocked)
+    monkeypatch.setattr("vastly.gitauth.account_id", _unmocked)
+
+
 @pytest.fixture
 def ssh_config_dir(tmp_path, monkeypatch):
     """Redirect SSH_CONFIG_DIR to a temp directory for safe testing.

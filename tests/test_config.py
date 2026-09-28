@@ -122,6 +122,28 @@ class TestLoadConfig:
         assert result["workspace"] == "/workspace"
         assert result["disableAutoTmux"] is False
         assert result["gitRemote"] == "origin"
+        assert result["gitAuth"] == "agent"
+
+    @pytest.mark.parametrize("mode", ["agent", "auto", "deploy-key"])
+    def test_accepts_git_auth_modes(self, tmp_path, mode):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text(json.dumps({"gitAuth": mode}), encoding="utf-8")
+        assert load_config(cfg)["gitAuth"] == mode
+
+    def test_rejects_unknown_git_auth(self, tmp_path):
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text('{"gitAuth": "token"}', encoding="utf-8")
+        with pytest.raises(ConfigError, match="gitAuth"):
+            load_config(cfg)
+
+    def test_project_config_cannot_set_git_auth(self, tmp_path):
+        """A repo must not be able to turn on agent forwarding for you."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text('{"gitAuth": "deploy-key"}', encoding="utf-8")
+        project = tmp_path / "repo"
+        project.mkdir()
+        (project / ".vastly.json").write_text('{"gitAuth": "agent"}', encoding="utf-8")
+        assert load_config(cfg, project_dir=project)["gitAuth"] == "deploy-key"
 
     def test_reads_user_values(self, tmp_path):
         cfg = tmp_path / ".vastly.json"
@@ -402,5 +424,6 @@ class TestConfigTemplate:
             "postInstall",
             "installCommand",
             "copyFiles",
+            "gitAuth",
         }
         assert set(template.keys()) == expected
