@@ -124,13 +124,25 @@ def _confirm(prompt: str) -> bool:
 # ── Vastai wrappers ─────────────────────────────────────────────────
 
 
+# vastai calls that change an instance; polling calls use _POLL_TIMEOUT
+_VASTAI_TIMEOUT = 60
+_POLL_TIMEOUT = 30
+
+
 def _vastai_action(action: str, inst: Instance) -> None:
     """Run 'vastai stop/destroy instance <id>' and print result."""
-    result = subprocess.run(
-        ["vastai", action, "instance", str(inst.id)],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["vastai", action, "instance", str(inst.id)],
+            capture_output=True,
+            text=True,
+            timeout=_VASTAI_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise VastlyError(
+            f"Timed out trying to {action} {inst.display_name}. "
+            "Check the Vast.ai dashboard."
+        ) from None
     if result.returncode != 0:
         msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise VastlyError(f"Failed to {action} {inst.display_name}: {msg}")
@@ -141,11 +153,18 @@ def _vastai_action(action: str, inst: Instance) -> None:
 
 def _vastai_start(inst: Instance) -> bool:
     """Start an instance. Returns True if the start was queued (resources unavailable)."""
-    result = subprocess.run(
-        ["vastai", "start", "instance", str(inst.id)],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["vastai", "start", "instance", str(inst.id)],
+            capture_output=True,
+            text=True,
+            timeout=_VASTAI_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise VastlyError(
+            f"Timed out trying to start {inst.display_name}. "
+            "Check the Vast.ai dashboard."
+        ) from None
     if result.returncode != 0:
         msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise VastlyError(f"Failed to start {inst.display_name}: {msg}")
@@ -273,11 +292,16 @@ def _poll_for_running(
     while queued or time.monotonic() < deadline:
         time.sleep(_START_POLL_INTERVAL)
 
-        result = subprocess.run(
-            ["vastai", "show", "instance", inst_id, "--raw"],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            result = subprocess.run(
+                ["vastai", "show", "instance", inst_id, "--raw"],
+                capture_output=True,
+                text=True,
+                timeout=_POLL_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            # Counts as an API failure below
+            result = subprocess.CompletedProcess([], 1, "", "vastai timed out")
         if result.returncode != 0:
             api_failures += 1
             if api_failures >= _MAX_POLL_FAILURES:

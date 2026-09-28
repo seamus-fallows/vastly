@@ -2230,3 +2230,39 @@ class TestHttpsUrlTrailingSlash:
         clean_url = repo_url.rstrip("/")
         suggestion = clean_url.replace("https://", "git@", 1).replace("/", ":", 1)
         assert suggestion == "git@github.com:user/repo"
+
+
+# ── TestVastaiTimeouts ───────────────────────────────────────────────
+
+
+class TestVastaiTimeouts:
+    """vastai calls give up instead of hanging forever."""
+
+    @staticmethod
+    def _hang(cmd, **kwargs):
+        assert kwargs.get("timeout"), "vastai called without a timeout"
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    def test_action_timeout_raises_vastly_error(self, monkeypatch):
+        from vastly.commands import _vastai_action
+
+        monkeypatch.setattr("vastly.commands.subprocess.run", self._hang)
+        with pytest.raises(VastlyError, match="Timed out trying to stop"):
+            _vastai_action("stop", _inst(name="gpu"))
+
+    def test_start_timeout_raises_vastly_error(self, monkeypatch):
+        from vastly.commands import _vastai_start
+
+        monkeypatch.setattr("vastly.commands.subprocess.run", self._hang)
+        with pytest.raises(VastlyError, match="Timed out trying to start"):
+            _vastai_start(_inst(name="gpu"))
+
+    def test_poll_timeouts_count_as_api_failures(self, monkeypatch):
+        import vastly.commands
+        from vastly.commands import _poll_for_running
+
+        monkeypatch.setattr("time.sleep", lambda _: None)
+        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
+        monkeypatch.setattr("vastly.commands.subprocess.run", self._hang)
+        with pytest.raises(VastlyError, match="Cannot reach Vast.ai API"):
+            _poll_for_running("123", "gpu")

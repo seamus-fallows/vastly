@@ -87,3 +87,54 @@ class TestParseVersionPreRelease:
         from vastly.update import _parse_version
 
         assert _parse_version("0.4.0") >= _parse_version("0.4.0a1")
+
+
+class TestUpdateCheckRateLimit:
+    def test_failed_check_is_not_retried_on_every_run(self, monkeypatch):
+        """Offline: one attempt per interval, not a 3s wait on every connect."""
+        from vastly.update import check_for_update
+
+        calls = []
+
+        def offline(*a, **kw):
+            calls.append(1)
+            raise OSError("no internet")
+
+        monkeypatch.setattr("vastly.update.urllib.request.urlopen", offline)
+        check_for_update()
+        check_for_update()
+        assert len(calls) == 1
+
+    def test_corrupt_cache_does_not_disable_checks(self, monkeypatch):
+        import vastly.update
+        from vastly.update import check_for_update
+
+        vastly.update._CACHE_FILE.write_text("garbage", encoding="utf-8")
+        calls = []
+        monkeypatch.setattr(
+            "vastly.update.urllib.request.urlopen",
+            lambda *a, **kw: calls.append(1) or (_ for _ in ()).throw(OSError()),
+        )
+        check_for_update()
+        assert calls == [1]
+
+    def test_update_message_mentions_uv(self, monkeypatch, capsys):
+        import io
+        import json
+
+        from vastly.update import check_for_update
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        body = json.dumps({"info": {"version": "999.0.0"}}).encode()
+        monkeypatch.setattr(
+            "vastly.update.urllib.request.urlopen", lambda *a, **kw: Response(body)
+        )
+        check_for_update()
+        out = capsys.readouterr().out
+        assert "999.0.0 available" in out and "uv tool upgrade vastly" in out

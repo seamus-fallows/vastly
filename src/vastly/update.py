@@ -41,11 +41,19 @@ def check_for_update() -> None:
     malformed response) is silently swallowed.
     """
     try:
-        # Rate-limit: skip if checked recently
+        # Rate-limit: skip if checked recently. A corrupt cache counts as "never".
         if _CACHE_FILE.exists():
-            last_check = float(_CACHE_FILE.read_text(encoding="utf-8").strip())
+            try:
+                last_check = float(_CACHE_FILE.read_text(encoding="utf-8").strip())
+            except ValueError:
+                last_check = 0.0
             if time.time() - last_check < _CHECK_INTERVAL:
                 return
+
+        # Record the attempt before the request, so an offline machine doesn't
+        # retry (and wait up to 3s) on every connect
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        _CACHE_FILE.write_text(str(time.time()), encoding="utf-8")
 
         req = urllib.request.Request(
             "https://pypi.org/pypi/vastly/json",
@@ -60,15 +68,11 @@ def check_for_update() -> None:
         if not all(c.isdigit() or c == "." for c in latest):
             return
 
-        # Update cache timestamp regardless of whether update is available
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        _CACHE_FILE.write_text(str(time.time()), encoding="utf-8")
-
         if _parse_version(latest) > _parse_version(__version__):
             print(
                 dim(
                     f"  vastly {latest} available (you have {__version__}). "
-                    "Update: pip install -U vastly"
+                    "Update: pip install -U vastly (or: uv tool upgrade vastly)"
                 )
             )
     except Exception as e:
