@@ -197,10 +197,14 @@ fi
 
 # ── Step 9: IDE settings ───────────────────────────────────────────────
 
-# For VS Code settings, prefer the venv python, fall back to detected
+# For VS Code settings, prefer the project's own venv (e.g. created by uv sync),
+# then the image's venv, then the detected python
 VSCODE_PYTHON="$PYTHON_PATH"
 if [[ -x /venv/main/bin/python ]]; then
     VSCODE_PYTHON="/venv/main/bin/python"
+fi
+if [[ -x "${REPO_DIR}/.venv/bin/python" ]]; then
+    VSCODE_PYTHON="${REPO_DIR}/.venv/bin/python"
 fi
 [[ -z "$VSCODE_PYTHON" ]] && VSCODE_PYTHON="/usr/bin/python3"
 
@@ -251,10 +255,17 @@ if [[ -x /venv/main/bin/python ]]; then
     VENV_LINE="[[ \"\$VIRTUAL_ENV\" != \"/venv/main\" ]] && export VIRTUAL_ENV=/venv/main && export PATH=\"/venv/main/bin:\$PATH\" ${BASHRC_MARKER}"
 fi
 
+# Activate the project's own venv (e.g. uv projects) last so it takes priority
+PROJECT_VENV_LINE=""
+if [[ -f "${REPO_DIR}/.venv/bin/activate" ]]; then
+    PROJECT_VENV_LINE="[ -f \"${REPO_DIR}/.venv/bin/activate\" ] && . \"${REPO_DIR}/.venv/bin/activate\" ${BASHRC_MARKER}"
+fi
+
 {
     echo "export PATH=\"\$HOME/.local/bin:\$PATH\" ${BASHRC_MARKER}"
     [[ -n "$CONDA_LINE" ]] && echo "$CONDA_LINE"
     [[ -n "$VENV_LINE" ]] && echo "$VENV_LINE"
+    [[ -n "$PROJECT_VENV_LINE" ]] && echo "$PROJECT_VENV_LINE"
     echo "cd \"${REPO_DIR}\" ${BASHRC_MARKER}"
 } >> ~/.bashrc
 
