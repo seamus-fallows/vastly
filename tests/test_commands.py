@@ -2265,3 +2265,35 @@ class TestVastaiTimeouts:
         monkeypatch.setattr("vastly.commands.subprocess.run", self._hang)
         with pytest.raises(VastlyError, match="Cannot reach Vast.ai API"):
             _poll_for_running("123", "gpu")
+
+
+# ── TestOutputDecoding ───────────────────────────────────────────────
+
+
+class TestOutputDecoding:
+    """git output is UTF-8; vastai writes in the locale encoding when piped."""
+
+    def _record(self, monkeypatch, stdout=""):
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
+        return seen
+
+    def test_git_output_decoded_as_utf8(self, monkeypatch):
+        from vastly.commands import _git_root
+
+        seen = self._record(monkeypatch, stdout="/repo\n")
+        _git_root()
+        assert seen["encoding"] == "utf-8" and seen["errors"] == "replace"
+
+    def test_vastai_output_keeps_locale_encoding(self, monkeypatch):
+        from vastly.commands import _vastai_action
+
+        seen = self._record(monkeypatch)
+        _vastai_action("stop", _inst(name="gpu"))
+        assert "encoding" not in seen
+        assert seen["errors"] == "replace"

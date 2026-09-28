@@ -308,3 +308,34 @@ class TestRunScp:
 
         run_scp("/tmp/src", "host:/tmp/dest")
         assert "-r" not in captured_cmd
+
+
+class TestOutputDecoding:
+    """SSH output is decoded as UTF-8, and timeouts always return text."""
+
+    def test_run_ssh_decodes_utf8(self, monkeypatch):
+        from vastly.ssh import run_ssh
+
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen.update(kwargs)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr("vastly.ssh.subprocess.run", fake_run)
+        run_ssh("gpu", "echo hi")
+        assert seen["encoding"] == "utf-8" and seen["errors"] == "replace"
+
+    @pytest.mark.parametrize("output", [b"partial \xc3\xa9", "partial é"])
+    def test_timeout_output_is_text(self, monkeypatch, output):
+        """TimeoutExpired carries bytes on macOS/Linux even with text=True."""
+        from vastly.ssh import run_scp, run_ssh
+
+        def hang(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, 30, output=output, stderr=None)
+
+        monkeypatch.setattr("vastly.ssh.subprocess.run", hang)
+        for result in (run_ssh("gpu", "sleep 99"), run_scp("a", "gpu:b")):
+            assert result.returncode == 1
+            assert result.stdout == "partial é"
+            assert result.stderr == "timeout"

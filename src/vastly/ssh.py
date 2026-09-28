@@ -188,14 +188,31 @@ def run_ssh(
     try:
         if stream:
             return subprocess.run(cmd, text=True, timeout=deadline)
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=deadline)
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=deadline,
+        )
     except subprocess.TimeoutExpired as e:
         return subprocess.CompletedProcess(
             cmd,
             returncode=1,
-            stdout=e.stdout or "",
-            stderr=e.stderr or "timeout",
+            stdout=_as_text(e.stdout),
+            stderr=_as_text(e.stderr) or "timeout",
         )
+
+
+def _as_text(output: bytes | str | None) -> str:
+    """Captured output from a TimeoutExpired, as text.
+
+    Python gives it as bytes even when the process ran with text=True.
+    """
+    if isinstance(output, bytes):
+        return output.decode("utf-8", errors="replace")
+    return output or ""
 
 
 def run_scp(
@@ -230,12 +247,14 @@ def run_scp(
             ["scp", *flags, *opts, src, dest],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=deadline,
         )
     except subprocess.TimeoutExpired as e:
         return subprocess.CompletedProcess(
             ["scp", src, dest],
             returncode=1,
-            stdout=e.stdout or "",
-            stderr=e.stderr or "timeout",
+            stdout=_as_text(e.stdout),
+            stderr=_as_text(e.stderr) or "timeout",
         )

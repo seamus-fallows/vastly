@@ -57,7 +57,13 @@ def _gh(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess[str
     cmd = ["gh", *args]
     try:
         return subprocess.run(
-            cmd, input=stdin, capture_output=True, text=True, timeout=30
+            cmd,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         return subprocess.CompletedProcess(cmd, 1, stdout="", stderr=str(e))
@@ -127,6 +133,7 @@ def account_id() -> int | None:
             ["vastai", "show", "user", "--raw"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=15,
         )
         if result.returncode != 0:

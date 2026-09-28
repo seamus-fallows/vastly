@@ -79,6 +79,7 @@ def fetch_instances() -> list[dict[str, Any]]:
             ["vastai", "show", "instances", "--raw"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=30,
         )
     except subprocess.TimeoutExpired:

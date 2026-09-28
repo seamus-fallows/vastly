@@ -179,12 +179,16 @@ def setup_instances(
                 ["git", "config", "user.name"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=project_dir,
             ).stdout.strip()
             git_email = subprocess.run(
                 ["git", "config", "user.email"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=project_dir,
             ).stdout.strip()
 

@@ -46,6 +46,8 @@ def _git_root() -> Path | None:
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError:
         return None
@@ -92,6 +94,8 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
             ["git", "remote", "get-url", git_remote],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError:
         return None
@@ -136,6 +140,7 @@ def _vastai_action(action: str, inst: Instance) -> None:
             ["vastai", action, "instance", str(inst.id)],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=_VASTAI_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
@@ -158,6 +163,7 @@ def _vastai_start(inst: Instance) -> bool:
             ["vastai", "start", "instance", str(inst.id)],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=_VASTAI_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
@@ -204,6 +210,7 @@ def _vast_account() -> str:
             ["vastai", "show", "user", "--raw"],
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=15,
         )
     except subprocess.TimeoutExpired:
@@ -297,6 +304,7 @@ def _poll_for_running(
                 ["vastai", "show", "instance", inst_id, "--raw"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=_POLL_TIMEOUT,
             )
         except subprocess.TimeoutExpired:
