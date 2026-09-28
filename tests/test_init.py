@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import re
 
-import pytest
-
 from vastly import __version__, cyan, dim, green, red, yellow
 
 

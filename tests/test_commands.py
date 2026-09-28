@@ -2216,7 +2216,6 @@ class TestHttpsUrlTrailingSlash:
     """HTTPS URL conversion should handle trailing slashes correctly."""
 
     def test_trailing_slash_stripped(self, monkeypatch):
-        from vastly.remote import _check_repo_mismatch
 
         # The fix is in setup_instances which is hard to unit test directly.
         # Instead, verify the URL manipulation logic inline:
