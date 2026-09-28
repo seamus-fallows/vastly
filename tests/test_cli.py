@@ -222,3 +222,69 @@ class TestMainArgParsing:
         with patch("vastly.cli.cmd_list"):
             main(argv=["-v", "list"])
         assert vastly.VERBOSE is True
+
+
+class TestSshHelpPassthrough:
+    """`vst ssh` passes -h/--help after the first positional to the remote command."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self, tmp_path, monkeypatch):
+        # main() calls ensure_config(); an existing file keeps it off ~/.vastly
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
+
+    def test_help_flag_in_remote_cmd_passes_through(self):
+        with patch("vastly.cli.cmd_ssh") as mock:
+            main(argv=["ssh", "my-gpu", "df", "-h"])
+        args = mock.call_args[0][0]
+        assert args.command == "ssh"
+        assert args.name == "my-gpu"
+        assert args.remote_cmd == ["df", "-h"]
+
+    def test_help_flag_after_double_dash_passes_through(self):
+        with patch("vastly.cli.cmd_ssh") as mock:
+            main(argv=["ssh", "my-gpu", "--", "ls", "-h"])
+        args = mock.call_args[0][0]
+        assert args.name == "my-gpu"
+        assert args.remote_cmd == ["ls", "-h"]
+
+    def test_long_help_flag_in_remote_cmd_passes_through(self):
+        with patch("vastly.cli.cmd_ssh") as mock:
+            main(argv=["-v", "ssh", "my-gpu", "ls", "--help"])
+        args = mock.call_args[0][0]
+        assert args.name == "my-gpu"
+        assert args.remote_cmd == ["ls", "--help"]
+
+    def test_help_flag_after_bare_double_dash_passes_through(self):
+        with patch("vastly.cli.cmd_ssh") as mock:
+            main(argv=["ssh", "--", "-h"])
+        args = mock.call_args[0][0]
+        # argparse puts the lone arg in `name`; cmd_ssh folds an unmatched
+        # name into the remote command
+        assert [args.name, *args.remote_cmd] == ["-h"]
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["ssh", "-h"],
+            ["-h", "ssh"],
+            ["-v", "ssh", "--help"],
+            ["ssh", "-h", "my-gpu"],
+        ],
+    )
+    def test_help_before_first_positional_shows_ssh_help(self, argv, capsys):
+        with patch("vastly.cli.cmd_ssh") as mock:
+            with pytest.raises(SystemExit) as exc_info:
+                main(argv=argv)
+        assert exc_info.value.code == 0
+        assert "vst ssh [name] [command...]" in capsys.readouterr().out
+        mock.assert_not_called()
+
+    def test_other_subcommands_still_show_help_anywhere(self, capsys):
+        with patch("vastly.cli.cmd_stop") as mock:
+            with pytest.raises(SystemExit) as exc_info:
+                main(argv=["stop", "my-gpu", "-h"])
+        assert exc_info.value.code == 0
+        assert "vst stop [name]" in capsys.readouterr().out
+        mock.assert_not_called()

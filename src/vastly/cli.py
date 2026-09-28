@@ -197,6 +197,20 @@ def _print_cmd_help(cmd: str, parsers: dict[str, argparse.ArgumentParser]) -> No
     sys.exit(0)
 
 
+def _ssh_vst_args(raw: list[str]) -> list[str]:
+    """Return a `vst ssh` argv up to the first positional after `ssh`.
+
+    Only these args can ask for vst's own help. The first positional (instance
+    name or command) onward, and anything after `--`, is left for the remote
+    side, so `vst ssh my-gpu df -h` runs `df -h` instead of showing help.
+    """
+    start = raw.index("ssh") + 1
+    for i in range(start, len(raw)):
+        if raw[i] == "--" or not raw[i].startswith("-"):
+            return raw[:i]
+    return raw
+
+
 # ── Argument parser ─────────────────────────────────────────────────
 
 
@@ -328,9 +342,14 @@ def main(argv: list[str] | None = None) -> None:
         print(dim("  \u2514 Edit ~/.vastly/config.json to customize.\n"))
 
     parser, parsers = _build_parser()
+    non_flags = [a for a in raw if not a.startswith("-")]
 
-    # Handle help ourselves for clean, colored output
-    if {"-h", "--help"} & set(raw):
+    # Handle help ourselves for clean, colored output. For ssh, a -h/--help
+    # inside the remote command is passed through (see _ssh_vst_args).
+    if non_flags and non_flags[0] == "ssh":
+        if {"-h", "--help"} & set(_ssh_vst_args(raw)):
+            _print_cmd_help("ssh", parsers)
+    elif {"-h", "--help"} & set(raw):
         rest = [a for a in raw if a not in ("-h", "--help")]
         cmd = rest[0] if rest and not rest[0].startswith("-") else None
         if cmd in _CMD_HELP:
@@ -342,7 +361,6 @@ def main(argv: list[str] | None = None) -> None:
     # e.g. `vst my-gpu` becomes `vst connect my-gpu`
     # e.g. `vst -v my-gpu` becomes `vst -v connect my-gpu`
     known = set(parsers.keys())
-    non_flags = [a for a in raw if not a.startswith("-")]
     if non_flags and non_flags[0] not in known:
         idx = raw.index(non_flags[0])
         raw.insert(idx, "connect")
