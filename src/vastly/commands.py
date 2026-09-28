@@ -15,7 +15,15 @@ from pathlib import Path, PurePosixPath
 
 import vastly
 from vastly import __version__, cyan, dim, gitauth, green, red, yellow
-from vastly.config import _PROJECT_KEYS, CONFIG_PATH, Config, load_config
+from vastly.config import (
+    _PROJECT_KEYS,
+    CONFIG_PATH,
+    Config,
+    approve_commands,
+    commands_approved,
+    load_config,
+    project_commands,
+)
 from vastly.errors import VastlyError
 from vastly.ide import check_ide, open_ide
 from vastly.instance import (
@@ -110,6 +118,29 @@ def _local_repo_info(git_remote: str) -> tuple[str, str] | None:
     # Extract repo name from HTTPS (user/repo.git) and SSH (host:user/repo.git) URLs
     repo_name = repo_url.rsplit("/", 1)[-1].rsplit(":", 1)[-1].removesuffix(".git")
     return repo_url, repo_name
+
+
+def _approve_project_commands(repo_url: str, project_dir: Path | None) -> None:
+    """Ask before running shell commands from a repo's .vastly.json.
+
+    Asks the first time, and again whenever the commands change. Raises
+    VastlyError if the user says no.
+    """
+    commands = project_commands(project_dir)
+    if not commands or commands_approved(repo_url, commands):
+        return
+
+    print(yellow("  This repo's .vastly.json runs these commands on your instance:"))
+    if "installCommand" in commands:
+        print(f"    install:       {commands['installCommand']}")
+    for cmd in commands.get("postInstall", []):
+        print(f"    post-install:  {cmd}")
+    if not _confirm("  Run them during setup?"):
+        raise VastlyError(
+            "Setup cancelled -- this repo's commands weren't approved. "
+            "Review .vastly.json, or run 'vst -n' to open the IDE without setup."
+        )
+    approve_commands(repo_url, commands)
 
 
 def _confirm(prompt: str) -> bool:
@@ -451,6 +482,7 @@ def _do_connect(
         return
 
     repo_url, repo_name = repo_info
+    _approve_project_commands(repo_url, git_root)
 
     remote_path = f"{config['workspace']}/{repo_name}"
 

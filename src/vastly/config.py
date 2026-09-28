@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -325,3 +326,67 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
     _validate_config(config)
     vastly.verbose(f"Config loaded from {path}")
     return config
+
+
+# ── Project command approval ────────────────────────────────────────
+#
+# A repo's .vastly.json can run shell commands on your instance (installCommand,
+# postInstall). vastly asks before running them the first time, and again
+# whenever they change. Approvals are kept per repo URL, as a hash of the
+# commands, in ~/.vastly/approved-commands.json.
+
+
+def project_commands(project_dir: Path | None) -> dict[str, Any]:
+    """Shell commands a repo's .vastly.json would run on instances ({} if none)."""
+    if not project_dir:
+        return {}
+    project_cfg = project_dir / ".vastly.json"
+    try:
+        raw = json.loads(project_cfg.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}  # missing, or already reported by load_config()
+    if not isinstance(raw, dict):
+        return {}
+
+    commands: dict[str, Any] = {}
+    install = raw.get("installCommand")
+    if isinstance(install, str) and install:
+        commands["installCommand"] = install
+    post = raw.get("postInstall")
+    post = [post] if isinstance(post, str) else post
+    if isinstance(post, list):
+        post = [c for c in post if isinstance(c, str) and c]
+        if post:
+            commands["postInstall"] = post
+    return commands
+
+
+def _approvals_file() -> Path:
+    return CONFIG_DIR / "approved-commands.json"
+
+
+def _load_approvals() -> dict[str, str]:
+    try:
+        approvals = json.loads(_approvals_file().read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return approvals if isinstance(approvals, dict) else {}
+
+
+def _commands_hash(commands: dict[str, Any]) -> str:
+    encoded = json.dumps(commands, sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def commands_approved(repo_url: str, commands: dict[str, Any]) -> bool:
+    """Whether these exact project commands were approved for this repo."""
+    return _load_approvals().get(repo_url) == _commands_hash(commands)
+
+
+def approve_commands(repo_url: str, commands: dict[str, Any]) -> None:
+    """Remember that the user approved these project commands for this repo."""
+    approvals = _load_approvals()
+    approvals[repo_url] = _commands_hash(commands)
+    path = _approvals_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(approvals, indent=2) + "\n", encoding="utf-8")

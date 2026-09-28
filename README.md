@@ -137,7 +137,7 @@ You can create a `.vastly.json` in your repo root to set project-specific config
 
 User-specific keys (`ide`, `sshKeyPath`, `sshUser`, `disableAutoTmux`, `gitAuth`) are always read from the global `~/.vastly/config.json` and ignored in project configs. (A repo can't choose how your credentials are used.)
 
-> **Note:** `postInstall` and `installCommand` run as shell commands on your remote instance during setup. Review `.vastly.json` before running `vst` in unfamiliar repositories, just as you would review a `Makefile` or `package.json` scripts.
+> **Note:** `postInstall` and `installCommand` run as shell commands on your remote instance during setup. When they come from a repo's `.vastly.json`, `vst` shows them and asks before running them the first time, and again whenever they change. Your own global config is never asked about.
 
 ```jsonc
 // .vastly.json (in repo root)

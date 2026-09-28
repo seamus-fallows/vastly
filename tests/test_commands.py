@@ -2364,3 +2364,66 @@ class TestCopyTargets:
                 False,
             )
         ]
+
+
+# ── TestApproveProjectCommands ───────────────────────────────────────
+
+
+class TestApproveProjectCommands:
+    """vst asks before running shell commands from a repo's .vastly.json."""
+
+    URL = "git@github.com:o/r.git"
+
+    def _project(self, tmp_path, content):
+        (tmp_path / ".vastly.json").write_text(json.dumps(content), encoding="utf-8")
+        return tmp_path
+
+    def _answer(self, monkeypatch, answer):
+        prompts = []
+
+        def fake_input(prompt=""):
+            prompts.append(prompt)
+            if answer is EOFError:
+                raise EOFError
+            return answer
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        return prompts
+
+    def test_no_commands_no_prompt(self, monkeypatch, tmp_path):
+        from vastly.commands import _approve_project_commands
+
+        prompts = self._answer(monkeypatch, "n")
+        _approve_project_commands(self.URL, self._project(tmp_path, {"copyFiles": []}))
+        assert prompts == []
+
+    def test_yes_approves_and_remembers(self, monkeypatch, tmp_path, capsys):
+        from vastly.commands import _approve_project_commands
+
+        project = self._project(tmp_path, {"postInstall": ["make setup"]})
+        prompts = self._answer(monkeypatch, "y")
+        _approve_project_commands(self.URL, project)
+        _approve_project_commands(self.URL, project)  # remembered: no second prompt
+        assert len(prompts) == 1
+        assert "post-install:  make setup" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("answer", ["n", "", EOFError])
+    def test_no_or_no_answer_cancels(self, monkeypatch, tmp_path, answer):
+        from vastly.commands import _approve_project_commands
+
+        project = self._project(tmp_path, {"installCommand": "curl x | sh"})
+        self._answer(monkeypatch, answer)
+        with pytest.raises(VastlyError, match="weren't approved"):
+            _approve_project_commands(self.URL, project)
+
+    def test_changed_commands_ask_again(self, monkeypatch, tmp_path):
+        from vastly.commands import _approve_project_commands
+
+        prompts = self._answer(monkeypatch, "y")
+        _approve_project_commands(
+            self.URL, self._project(tmp_path, {"postInstall": ["make"]})
+        )
+        _approve_project_commands(
+            self.URL, self._project(tmp_path, {"postInstall": ["make", "rm -rf /"]})
+        )
+        assert len(prompts) == 2
