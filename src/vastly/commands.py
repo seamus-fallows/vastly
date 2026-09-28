@@ -19,6 +19,7 @@ from vastly.config import CONFIG_PATH, Config, _PROJECT_KEYS, load_config
 from vastly.errors import VastlyError
 from vastly.ide import check_ide, open_ide
 from vastly.instance import (
+    NO_INSTANCES_MSG,
     STARTABLE_STATES,
     STOPPED_STATES,
     STOPPABLE_STATES,
@@ -156,6 +157,47 @@ def _vastai_start(inst: Instance) -> bool:
     else:
         print(green(f"  Started {inst.display_name}"))
     return queued
+
+
+def _format_account(user: dict) -> str | None:
+    """Format 'vastai show user' data as 'username (email, team)'.
+
+    Returns None if the data has no username or email to identify the account.
+    """
+    name = user.get("username") or user.get("email")
+    if not name:
+        return None
+    details = []
+    if user.get("email") and user["email"] != name:
+        details.append(user["email"])
+    if user.get("is_team"):
+        details.append("team")
+    return f"{name} ({', '.join(details)})" if details else name
+
+
+def _vast_account() -> str:
+    """Describe the Vast.ai account that vastai's saved API key belongs to."""
+    unknown = "(unknown -- run 'vastai show user' to debug)"
+    if not shutil.which("vastai"):
+        return "(vastai CLI not installed)"
+    try:
+        result = subprocess.run(
+            ["vastai", "show", "user", "--raw"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return "(unknown -- Vast.ai API timed out)"
+    if result.returncode != 0:
+        return "(unavailable -- no API key set, or network issue. Set one with: vastai set api-key <key>)"
+    try:
+        user = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return unknown
+    if not isinstance(user, dict):
+        return unknown
+    return _format_account(user) or unknown
 
 
 def _vastai_destroy(inst: Instance) -> None:
@@ -330,7 +372,7 @@ def _do_connect(
                     raise VastlyError(f"'{name}' is inactive and cannot be started.")
                 raise VastlyError(f"No instance named '{name}'.")
         elif not startable:
-            raise VastlyError("No Vast instances found.")
+            raise VastlyError(NO_INSTANCES_MSG)
         else:
             to_start = _pick_startable(startable, select_all=select_all)
 
@@ -749,6 +791,9 @@ def cmd_config(args: argparse.Namespace) -> None:
     for key, val, desc in rows:
         print(f"  {green(key.ljust(key_w))}  {val.ljust(val_w)}  {dim(desc)}")
 
+    # Which account vastai's saved API key belongs to (personal vs team matters)
+    print(f"\n{cyan('vast account:')} {_vast_account()}")
+
     # Project config overlay
     if git_root:
         project_cfg = git_root / ".vastly.json"
@@ -800,7 +845,7 @@ def cmd_ssh(args: argparse.Namespace) -> None:
     if not running:
         startable = [i for i in all_instances if i.status in STARTABLE_STATES]
         if not startable:
-            raise VastlyError("No Vast instances found.")
+            raise VastlyError(NO_INSTANCES_MSG)
 
         if args.name:
             match = find_by_name(startable, args.name)

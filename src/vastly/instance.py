@@ -63,6 +63,11 @@ TRANSITIONAL_STATES = {"loading", "creating", "connecting"}
 STARTABLE_STATES = STOPPED_STATES | TRANSITIONAL_STATES
 STOPPABLE_STATES = {"running"} | TRANSITIONAL_STATES
 
+# Often means the saved API key belongs to a different account (e.g. personal vs team)
+NO_INSTANCES_MSG = (
+    "No Vast instances found. Run 'vst config' to check which Vast account is active."
+)
+
 
 def fetch_instances() -> list[dict[str, Any]]:
     """Call vastai CLI and return raw instance data for all instances.
@@ -331,7 +336,7 @@ def get_synced_instances(config: Config) -> list[Instance]:
     """
     result = sync_instances(config)
     if not result:
-        raise VastlyError("No Vast instances found.")
+        raise VastlyError(NO_INSTANCES_MSG)
     return result
 
 
@@ -348,7 +353,7 @@ def get_running_instances(config: Config) -> list[Instance]:
                 f"No running instances. {len(all_instances)} inactive. "
                 "Use 'vst list' to see all, 'vst start' to restart."
             )
-        raise VastlyError("No Vast instances found.")
+        raise VastlyError(NO_INSTANCES_MSG)
     return running
 
 

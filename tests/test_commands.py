@@ -535,6 +535,26 @@ class TestVastaiStart:
 class TestCmdConfig:
     """Test cmd_config output."""
 
+    @pytest.fixture(autouse=True)
+    def _fake_account(self, monkeypatch):
+        # cmd_config asks vastai which account is active -- never hit the real API
+        monkeypatch.setattr(
+            "vastly.commands._vast_account", lambda: "alice (alice@example.com)"
+        )
+
+    def test_shows_vast_account(self, monkeypatch, capsys, tmp_path):
+        from vastly.commands import cmd_config
+
+        cfg = tmp_path / ".vastly.json"
+        cfg.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("vastly.commands._git_root", lambda: None)
+        monkeypatch.setattr("vastly.commands.load_config", lambda **kw: _MINIMAL_CONFIG)
+        monkeypatch.setattr("vastly.config.CONFIG_PATH", cfg)
+
+        cmd_config(argparse.Namespace(verbose=False))
+
+        assert "vast account: alice (alice@example.com)" in capsys.readouterr().out
+
     def test_shows_resolved_config(self, monkeypatch, capsys, tmp_path):
         from vastly.commands import cmd_config
 
@@ -599,6 +619,91 @@ class TestCmdConfig:
         output = capsys.readouterr().out
         assert "project config:" in output
         assert "overrides global" in output
+
+
+# ── TestVastAccount ──────────────────────────────────────────────────
+
+
+class TestVastAccount:
+    """Test _format_account and _vast_account (which account the API key belongs to)."""
+
+    @pytest.mark.parametrize(
+        "user, expected",
+        [
+            (
+                {"username": "moirai", "email": "team@example.com", "is_team": True},
+                "moirai (team@example.com, team)",
+            ),
+            (
+                {"username": "alice", "email": "alice@example.com", "is_team": False},
+                "alice (alice@example.com)",
+            ),
+            ({"email": "alice@example.com"}, "alice@example.com"),
+            ({"username": "alice"}, "alice"),
+            ({"id": 123}, None),
+        ],
+    )
+    def test_format_account(self, user, expected):
+        from vastly.commands import _format_account
+
+        assert _format_account(user) == expected
+
+    def _patch_vastai(self, monkeypatch, *, installed=True, run=None):
+        monkeypatch.setattr(
+            "vastly.commands.shutil.which",
+            lambda name: "/usr/bin/vastai" if installed else None,
+        )
+        if run:
+            monkeypatch.setattr("vastly.commands.subprocess.run", run)
+
+    def test_success(self, monkeypatch):
+        from vastly.commands import _vast_account
+
+        user = {"username": "alice", "email": "alice@example.com", "api_key": "secret"}
+
+        def fake_run(cmd, **_kwargs):
+            assert cmd == ["vastai", "show", "user", "--raw"]
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=json.dumps(user), stderr=""
+            )
+
+        self._patch_vastai(monkeypatch, run=fake_run)
+        result = _vast_account()
+        assert result == "alice (alice@example.com)"
+        assert "secret" not in result
+
+    def test_vastai_not_installed(self, monkeypatch):
+        from vastly.commands import _vast_account
+
+        self._patch_vastai(monkeypatch, installed=False)
+        assert "not installed" in _vast_account()
+
+    def test_command_fails(self, monkeypatch):
+        from vastly.commands import _vast_account
+
+        self._patch_vastai(
+            monkeypatch,
+            run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "401"),
+        )
+        assert "vastai set api-key" in _vast_account()
+
+    def test_invalid_json(self, monkeypatch):
+        from vastly.commands import _vast_account
+
+        self._patch_vastai(
+            monkeypatch,
+            run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "oops", ""),
+        )
+        assert "unknown" in _vast_account()
+
+    def test_timeout(self, monkeypatch):
+        from vastly.commands import _vast_account
+
+        def fake_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+        self._patch_vastai(monkeypatch, run=fake_run)
+        assert "timed out" in _vast_account()
 
 
 # ── TestConnectStoppedInstance ────────────────────────────────────────
