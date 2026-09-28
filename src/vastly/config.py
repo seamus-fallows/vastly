@@ -262,6 +262,10 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
             f"Invalid JSON in {path}: {e}\n"
             "Fix the file or delete it to regenerate from template."
         ) from e
+    except OSError as e:
+        raise ConfigError(f"Can't read {path}: {e.strerror or e}") from e
+    if not isinstance(raw, dict):
+        raise ConfigError(f"Invalid config in {path}: expected a JSON object {{...}}")
 
     _warn_unknown_keys(raw, str(path))
 
@@ -297,6 +301,12 @@ def load_config(path: Path | None = None, *, project_dir: Path | None = None) ->
                     f"Invalid JSON in {project_cfg}: {e}\n"
                     "Fix the project config or remove it."
                 ) from e
+            except OSError as e:
+                raise ConfigError(f"Can't read {project_cfg}: {e.strerror or e}") from e
+            if not isinstance(project_raw, dict):
+                raise ConfigError(
+                    f"Invalid config in {project_cfg}: expected a JSON object {{...}}"
+                )
 
             _warn_unknown_keys(project_raw, str(project_cfg))
 

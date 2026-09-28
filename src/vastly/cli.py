@@ -44,7 +44,7 @@ _CMD_HELP = {
         "detail": "Syncs with the Vast.ai API each time.",
     },
     "start": {
-        "usage": "vst start [name] [--all] [-n]",
+        "usage": "vst start [name] [--all] [-n] [--git-auth MODE]",
         "desc": "Start a stopped or exited instance.",
         "detail": "Waits for the instance to be ready, then connects automatically.",
         "examples": [
@@ -311,6 +311,13 @@ def _build_parser() -> tuple[
     p.add_argument(
         "-n", "--no-connect", action="store_true", help="start without connecting"
     )
+    p.add_argument(
+        "--git-auth",
+        choices=GIT_AUTH_MODES,
+        default=argparse.SUPPRESS,
+        metavar="MODE",
+        help="git access when it connects: agent, auto, or deploy-key",
+    )
     parsers["start"] = p
 
     # Name
@@ -351,7 +358,20 @@ def main(argv: list[str] | None = None) -> None:
 
     raw = list(argv if argv is not None else sys.argv[1:])
 
-    if ensure_config():
+    try:
+        created = ensure_config()
+    except OSError as e:
+        print(
+            red(f"vst: can't create {CONFIG_PATH}: {e.strerror or e}"), file=sys.stderr
+        )
+        print(
+            dim(
+                "Check that your home folder is writable, or create the file yourself."
+            ),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    if created:
         print(dim("  Created ") + str(CONFIG_PATH))
         print(dim("  - Run 'vst' from a git repo to connect to your Vast.ai instance."))
         print(dim("  - Run 'vst -h' for all commands."))
@@ -400,6 +420,10 @@ def main(argv: list[str] | None = None) -> None:
             args.no_setup = True
         if "--all" in raw:
             args.all = True
+        # The rescan can combine a top-level -f with a subcommand -n (or the
+        # reverse), which argparse's mutually exclusive groups can't see
+        if args.force_setup and args.no_setup:
+            parser.error("-f/--force-setup and -n/--no-setup can't be used together")
 
     if args.verbose:
         vastly.VERBOSE = True

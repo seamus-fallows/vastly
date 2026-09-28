@@ -750,7 +750,10 @@ def cmd_start(args: argparse.Namespace) -> None:
         return
 
     # Auto-connect to the first instance (or only instance)
-    _do_connect(name=selected[0].alias or selected[0].name)
+    _do_connect(
+        name=selected[0].alias or selected[0].name,
+        git_auth=getattr(args, "git_auth", None),
+    )
 
 
 def _git_auth_preview(config: Config) -> str:

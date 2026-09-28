@@ -130,6 +130,27 @@ class TestLoadConfig:
         cfg.write_text(json.dumps({"gitAuth": mode}), encoding="utf-8")
         assert load_config(cfg)["gitAuth"] == mode
 
+    def test_unreadable_config_raises_config_error(self, tmp_path):
+        cfg = tmp_path / "config.json"
+        cfg.mkdir()  # reading a directory fails with an OSError
+        with pytest.raises(ConfigError, match="Can't read"):
+            load_config(cfg)
+
+    def test_non_object_config_raises_config_error(self, tmp_path):
+        cfg = tmp_path / "config.json"
+        cfg.write_text("[]", encoding="utf-8")
+        with pytest.raises(ConfigError, match="expected a JSON object"):
+            load_config(cfg)
+
+    def test_non_object_project_config_raises_config_error(self, tmp_path):
+        cfg = tmp_path / "config.json"
+        cfg.write_text("{}", encoding="utf-8")
+        project = tmp_path / "repo"
+        project.mkdir()
+        (project / ".vastly.json").write_text('"oops"', encoding="utf-8")
+        with pytest.raises(ConfigError, match="expected a JSON object"):
+            load_config(cfg, project_dir=project)
+
     def test_rejects_unknown_git_auth(self, tmp_path):
         cfg = tmp_path / ".vastly.json"
         cfg.write_text('{"gitAuth": "token"}', encoding="utf-8")

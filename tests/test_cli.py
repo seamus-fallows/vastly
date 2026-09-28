@@ -261,6 +261,51 @@ class TestGitAuthFlag:
         mock.assert_not_called()
 
 
+class TestFlagEdgeCases:
+    @pytest.fixture(autouse=True)
+    def _existing_config(self):
+        from vastly import config
+
+        config.CONFIG_PATH.write_text("{}", encoding="utf-8")
+
+    @pytest.mark.parametrize(
+        "argv", [["-f", "connect", "-n"], ["-n", "my-gpu", "-f"], ["-f", "-n"]]
+    )
+    def test_force_and_no_setup_rejected(self, argv, capsys):
+        with patch("vastly.cli.cmd_connect") as mock:
+            with pytest.raises(SystemExit) as exc_info:
+                main(argv=argv)
+        assert exc_info.value.code == 2
+        mock.assert_not_called()
+        # Our check, or argparse's own when both flags are top-level
+        err = capsys.readouterr().err
+        assert "can't be used together" in err or "not allowed with" in err
+
+    @pytest.mark.parametrize(
+        "argv, mode",
+        [
+            (["start", "--git-auth", "agent"], "agent"),
+            (["--git-auth", "auto", "start"], "auto"),
+            (["start", "train"], None),
+        ],
+    )
+    def test_start_accepts_git_auth(self, argv, mode):
+        with patch("vastly.cli.cmd_start") as mock:
+            main(argv=argv)
+        assert getattr(mock.call_args[0][0], "git_auth", None) == mode
+
+    def test_config_creation_error_is_explained(self, monkeypatch, capsys):
+        def fail():
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr("vastly.cli.ensure_config", fail)
+        with pytest.raises(SystemExit) as exc_info:
+            main(argv=["list"])
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "can't create" in err and "Permission denied" in err
+
+
 class TestSshHelpPassthrough:
     """`vst ssh` passes -h/--help after the first positional to the remote command."""
 
