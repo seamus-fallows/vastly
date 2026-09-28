@@ -157,17 +157,21 @@ def setup_instances(
                 )
             )
 
-        # Fetch git identity lazily -- only when setup is actually needed
+        # Fetch git identity lazily -- only when setup is actually needed.
+        # No --global: use the identity that applies to this repo (repo-local
+        # config and includeIf rules win over the global one).
         if git_name is None:
             git_name = subprocess.run(
-                ["git", "config", "--global", "user.name"],
+                ["git", "config", "user.name"],
                 capture_output=True,
                 text=True,
+                cwd=project_dir,
             ).stdout.strip()
             git_email = subprocess.run(
-                ["git", "config", "--global", "user.email"],
+                ["git", "config", "user.email"],
                 capture_output=True,
                 text=True,
+                cwd=project_dir,
             ).stdout.strip()
 
         # Setup is needed -- git identity required

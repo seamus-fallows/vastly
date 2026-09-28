@@ -144,6 +144,30 @@ class TestSetupInstances:
         )
         assert result == []
 
+    def test_git_identity_read_from_project_repo(self, monkeypatch, tmp_path):
+        """Identity comes from the repo's effective git config, not just --global."""
+        git_calls = []
+
+        def recording_run(cmd, **kwargs):
+            git_calls.append((cmd, kwargs.get("cwd")))
+            return subprocess.CompletedProcess(cmd, 0, stdout="Repo User\n", stderr="")
+
+        monkeypatch.setattr("subprocess.run", recording_run)
+        monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
+        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        setup_instances(
+            [_inst("gpu-1")],
+            "git@github.com:u/r.git",
+            "r",
+            self._base_config(),
+            project_dir=tmp_path,
+        )
+        assert [cmd for cmd, _ in git_calls] == [
+            ["git", "config", "user.name"],
+            ["git", "config", "user.email"],
+        ]
+        assert all(cwd == tmp_path for _, cwd in git_calls)
+
     def test_scp_failure_skips(self, monkeypatch):
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
         monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock(success=False))
