@@ -6,6 +6,7 @@ import json
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,26 @@ from vastly.remote import _PROBE_SEP, setup_instances
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "vastly"
 DATA = SRC / "data"
+
+
+def _find_bash() -> str | None:
+    """A bash that can syntax-check scripts, or None.
+
+    On Windows, prefer Git's bash (next to git.exe): C:\\Windows\\System32\\bash.exe
+    is the WSL launcher, which fails when no Linux distro is installed -- as on
+    GitHub's Windows runners, where it comes first on PATH.
+    """
+    if sys.platform != "win32":
+        return shutil.which("bash")
+    git = shutil.which("git")
+    if git:
+        git_bash = Path(git).resolve().parents[1] / "bin" / "bash.exe"
+        if git_bash.exists():
+            return str(git_bash)
+    bash = shutil.which("bash")
+    if bash and Path(bash).parent.name.lower() == "system32":
+        return None
+    return bash
 
 
 def _setup_args(remote_cmd: str) -> list[str]:
@@ -483,14 +504,17 @@ class TestSetupRemoteScript:
         assert (DATA / "setup-remote.sh").exists()
 
     def test_valid_bash_syntax(self):
-        if not shutil.which("bash"):
+        bash = _find_bash()
+        if not bash:
             pytest.skip("bash not available")
         result = subprocess.run(
-            ["bash", "-n", str(DATA / "setup-remote.sh")],
+            [bash, "-n", str(DATA / "setup-remote.sh")],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 0, f"{bash}: {result.stderr or result.stdout}"
 
     def test_script_uses_strict_mode(self):
         content = (DATA / "setup-remote.sh").read_text(encoding="utf-8")
