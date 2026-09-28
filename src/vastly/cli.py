@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import sys
 
 import vastly
@@ -308,6 +309,12 @@ def _build_parser() -> tuple[
 
 def main(argv: list[str] | None = None) -> None:
     """Parse arguments and dispatch to the appropriate subcommand."""
+    # Windows falls back to cp1252 when output is piped or redirected, which
+    # can't encode the box-drawing characters used in some messages. Print "?"
+    # instead of crashing. (stderr already defaults to errors="backslashreplace".)
+    if sys.platform == "win32" and isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(errors="replace")
+
     raw = list(argv if argv is not None else sys.argv[1:])
 
     if ensure_config():
