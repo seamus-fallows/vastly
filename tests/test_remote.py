@@ -269,6 +269,34 @@ class TestSetupInstances:
         setup_instances([_inst("gpu-1")], "git@github.com:u/r.git", "r", config)
         assert "false" in setup_cmds[0]
 
+    def test_copy_files_directory_targets_parent(self, monkeypatch, tmp_path):
+        """copyFiles dirs are copied into their parent, so vst -f doesn't nest them."""
+        (tmp_path / ".claude").mkdir()
+        (tmp_path / "cfg" / "sub").mkdir(parents=True)
+        (tmp_path / ".env").write_text("X=1")
+        scp_calls = []
+
+        def recording_scp(src, dest, **kwargs):
+            scp_calls.append((src, dest))
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+        monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
+        monkeypatch.setattr("vastly.remote.run_scp", recording_scp)
+        config = {**self._base_config(), "copyFiles": [".claude/", "cfg/sub", ".env"]}
+        setup_instances(
+            [_inst("gpu-1")],
+            "git@github.com:u/r.git",
+            "r",
+            config,
+            project_dir=tmp_path,
+        )
+        copies = scp_calls[1:]  # the first scp is the setup script
+        assert copies == [
+            (str(tmp_path / ".claude"), "gpu-1:/workspace/r/"),
+            (str(tmp_path / "cfg" / "sub"), "gpu-1:/workspace/r/cfg/"),
+            (str(tmp_path / ".env"), "gpu-1:/workspace/r/.env"),
+        ]
+
     # ── Git access (gitAuth) ──
 
     def _run_git_auth_setup(

@@ -290,7 +290,8 @@ def setup_instances(
         copy_files = config["copyFiles"]
         if copy_files and project_dir:
             remote_base = f"{config['workspace']}/{repo_name}"
-            for rel_path in copy_files:
+            for entry in copy_files:
+                rel_path = entry.replace("\\", "/").rstrip("/")
                 local_path = project_dir / rel_path
                 if not local_path.exists():
                     print(
@@ -299,20 +300,24 @@ def setup_instances(
                         )
                     )
                     continue
-                remote_dest = f"{name}:{remote_base}/{rel_path}"
                 print(cyan(f"  {label}: copying {rel_path}"))
                 # Ensure parent directory exists on remote (use PurePosixPath
                 # so we get forward slashes even when running on Windows)
                 parent_rel = str(PurePosixPath(rel_path).parent)
-                if parent_rel != ".":
-                    remote_parent = f"{remote_base}/{parent_rel}"
-                    run_ssh(name, f"mkdir -p {shlex.quote(remote_parent)}")
-                cp = run_scp(
-                    str(local_path),
-                    remote_dest,
-                    setup=True,
-                    recursive=local_path.is_dir(),
+                remote_parent = (
+                    remote_base if parent_rel == "." else f"{remote_base}/{parent_rel}"
                 )
+                if parent_rel != ".":
+                    run_ssh(name, f"mkdir -p {shlex.quote(remote_parent)}")
+                # Directories go *into* their parent, so re-running setup (vst -f)
+                # doesn't nest a second copy inside the first
+                is_dir = local_path.is_dir()
+                remote_dest = (
+                    f"{name}:{remote_parent}/"
+                    if is_dir
+                    else f"{name}:{remote_base}/{rel_path}"
+                )
+                cp = run_scp(str(local_path), remote_dest, setup=True, recursive=is_dir)
                 if cp.returncode != 0:
                     print(yellow(f"  {label}: failed to copy {rel_path}"))
 

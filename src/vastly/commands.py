@@ -642,7 +642,8 @@ def _copy_one(
 ) -> bool:
     """Copy a single file/directory. Returns True on success."""
 
-    rel_path = raw_path.rstrip("/\\")
+    # Remote paths always use forward slashes, even when typed on Windows
+    rel_path = raw_path.replace("\\", "/").rstrip("/")
     remote_path = f"{remote_base}/{rel_path}"
     local_path = git_root / rel_path
 
@@ -651,15 +652,21 @@ def _copy_one(
     if direction == "up" and local_path.exists():
         is_dir = is_dir or local_path.is_dir()
 
+    # Directories are copied *into their parent*: `scp -r dir target` creates
+    # target/dir when target already exists, so targeting the directory itself
+    # would nest a second copy (data/data).
+    parent_rel = str(PurePosixPath(rel_path).parent)
+    remote_parent = remote_base if parent_rel == "." else f"{remote_base}/{parent_rel}"
+
     if direction == "down":
         if not is_dir:
             probe = run_ssh(inst.name, f"test -d {shlex.quote(remote_path)}")
             is_dir = probe.returncode == 0
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        src = f"{inst.name}:{remote_path}"
-        if is_dir:
-            src = f"{inst.name}:{remote_path}/"
-        result = run_scp(src, str(local_path), recursive=is_dir, stream=True)
+        dest = str(local_path.parent) if is_dir else str(local_path)
+        result = run_scp(
+            f"{inst.name}:{remote_path}", dest, recursive=is_dir, stream=True
+        )
         if result.returncode != 0:
             print(yellow(f"  Download failed for {rel_path}"))
             return False
@@ -670,11 +677,9 @@ def _copy_one(
     if not local_path.exists():
         print(yellow(f"  {rel_path} not found locally, skipping"))
         return False
-    parent_rel = str(PurePosixPath(rel_path).parent)
     if parent_rel != ".":
-        remote_parent = f"{remote_base}/{parent_rel}"
         run_ssh(inst.name, f"mkdir -p {shlex.quote(remote_parent)}")
-    dest = f"{inst.name}:{remote_path}"
+    dest = f"{inst.name}:{remote_parent}/" if is_dir else f"{inst.name}:{remote_path}"
     result = run_scp(str(local_path), dest, recursive=is_dir, stream=True)
     if result.returncode != 0:
         print(yellow(f"  Upload failed for {rel_path}"))

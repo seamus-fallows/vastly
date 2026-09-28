@@ -2297,3 +2297,70 @@ class TestOutputDecoding:
         _vastai_action("stop", _inst(name="gpu"))
         assert "encoding" not in seen
         assert seen["errors"] == "replace"
+
+
+# ── TestCopyTargets ──────────────────────────────────────────────────
+
+
+class TestCopyTargets:
+    """Directories are copied into their parent, so repeat copies don't nest."""
+
+    def _run(self, monkeypatch, tmp_path, direction, raw_path, *, remote_is_dir=False):
+        from vastly.commands import _copy_one
+
+        scp_calls, ssh_calls = [], []
+
+        def fake_ssh(host, command, **kwargs):
+            ssh_calls.append(command)
+            rc = 0 if (command.startswith("test -d") and remote_is_dir) else 1
+            if command.startswith("mkdir"):
+                rc = 0
+            return subprocess.CompletedProcess([], rc, stdout="", stderr="")
+
+        def fake_scp(src, dest, **kwargs):
+            scp_calls.append((src, dest, kwargs.get("recursive")))
+            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+
+        monkeypatch.setattr("vastly.commands.run_ssh", fake_ssh)
+        monkeypatch.setattr("vastly.commands.run_scp", fake_scp)
+        ok = _copy_one(
+            direction, raw_path, _inst(name="gpu"), "/workspace/repo", tmp_path
+        )
+        assert ok
+        return scp_calls, ssh_calls
+
+    def test_upload_directory_targets_parent(self, monkeypatch, tmp_path):
+        (tmp_path / "data").mkdir()
+        scp_calls, _ = self._run(monkeypatch, tmp_path, "up", "data")
+        assert scp_calls == [(str(tmp_path / "data"), "gpu:/workspace/repo/", True)]
+
+    def test_upload_nested_directory_targets_parent(self, monkeypatch, tmp_path):
+        (tmp_path / "a" / "b").mkdir(parents=True)
+        scp_calls, ssh_calls = self._run(monkeypatch, tmp_path, "up", "a\\b\\")
+        assert scp_calls == [
+            (str(tmp_path / "a" / "b"), "gpu:/workspace/repo/a/", True)
+        ]
+        assert ssh_calls == ["mkdir -p /workspace/repo/a"]
+
+    def test_upload_file_targets_file_path(self, monkeypatch, tmp_path):
+        (tmp_path / ".env").write_text("X=1")
+        scp_calls, _ = self._run(monkeypatch, tmp_path, "up", ".env")
+        assert scp_calls == [
+            (str(tmp_path / ".env"), "gpu:/workspace/repo/.env", False)
+        ]
+
+    def test_download_directory_targets_local_parent(self, monkeypatch, tmp_path):
+        scp_calls, _ = self._run(
+            monkeypatch, tmp_path, "down", "results", remote_is_dir=True
+        )
+        assert scp_calls == [("gpu:/workspace/repo/results", str(tmp_path), True)]
+
+    def test_download_file_targets_file_path(self, monkeypatch, tmp_path):
+        scp_calls, _ = self._run(monkeypatch, tmp_path, "down", "out/log.txt")
+        assert scp_calls == [
+            (
+                "gpu:/workspace/repo/out/log.txt",
+                str(tmp_path / "out" / "log.txt"),
+                False,
+            )
+        ]
