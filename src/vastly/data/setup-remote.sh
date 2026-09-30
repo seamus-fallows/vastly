@@ -72,11 +72,20 @@ fi
 
 # ── Step 3: Git host known keys ───────────────────────────────────────
 
+# GitHub's published host key (https://api.github.com/meta), so nothing on the
+# network can pose as github.com. Other hosts are trusted on first use.
+GITHUB_HOST_KEY="github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+
 if [[ "$REPO_URL" == git@* ]] || [[ "$REPO_URL" == ssh://* ]]; then
     REPO_HOST=$(echo "$REPO_URL" | sed -n 's/.*@\([^:/]*\).*/\1/p')
-    if [[ -n "$REPO_HOST" ]] && ! grep -q "^${REPO_HOST} " ~/.ssh/known_hosts 2>/dev/null; then
+    mkdir -p ~/.ssh
+    if [[ "$REPO_HOST" == "github.com" ]]; then
+        if ! grep -qxF "$GITHUB_HOST_KEY" ~/.ssh/known_hosts 2>/dev/null; then
+            log "Adding GitHub's host key to known_hosts"
+            echo "$GITHUB_HOST_KEY" >> ~/.ssh/known_hosts
+        fi
+    elif [[ -n "$REPO_HOST" ]] && ! grep -q "^${REPO_HOST} " ~/.ssh/known_hosts 2>/dev/null; then
         log "Adding ${REPO_HOST} to known_hosts"
-        mkdir -p ~/.ssh
         _keys=$(ssh-keyscan "$REPO_HOST" 2>/dev/null)
         if [ -n "$_keys" ]; then
             echo "$_keys" >> ~/.ssh/known_hosts
