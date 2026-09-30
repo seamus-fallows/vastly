@@ -4,13 +4,15 @@ Connect to Vast.ai GPU instances from your terminal: sync SSH configs, set up yo
 
 ## Install
 
-Requires the [Vast.ai CLI](https://vast.ai/docs/cli/getting-started) (`pip install vastai && vastai set api-key YOUR_KEY`) and [VS Code](https://code.visualstudio.com) or [Cursor](https://cursor.com) with the Remote-SSH extension.
+Requires [VS Code](https://code.visualstudio.com) or [Cursor](https://cursor.com) with the Remote-SSH extension.
 
 ```sh
 pip install vastly
 ```
 
 This gives you two equivalent commands: `vastly` and `vst` (shorthand).
+
+The first time you run it, `vst` asks for a Vast.ai API key ([create one here](https://cloud.vast.ai/manage-keys/)). It's saved where the [Vast.ai CLI](https://vast.ai/docs/cli/getting-started) keeps its key (`~/.config/vastai/vast_api_key`), so if you already use `vastai`, there's nothing to do -- and switching the key in one switches both. `VAST_API_KEY` overrides it. The `vastai` CLI itself isn't needed.
 
 ## Quick Start
 
@@ -68,6 +70,7 @@ vst ssh [name] [command...]  # SSH into an instance or run a remote command
 vst cp up|down <paths...>    # copy files to/from remote
 vst name <alias> [-i inst] [--clear]  # assign a custom name to an instance
 vst config                   # show current configuration
+vst config --api-key         # enter a new Vast.ai API key
 ```
 
 Use `-v` / `--verbose` with any command for debug output.
@@ -147,6 +150,14 @@ User-specific keys (`ide`, `sshKeyPath`, `sshUser`, `disableAutoTmux`, `gitAuth`
 }
 ```
 
+## SSH and host keys
+
+vastly writes one SSH config file per running instance to `~/.ssh/vast.d/`, so `ssh <name>` and your IDE work directly. Each instance's host key is trusted the first time you connect and checked every time after that, so a different machine can't pose as your instance (which matters when your SSH agent is forwarded). Keys are stored in `~/.vastly/known_hosts` under the instance's ID, so a new address after a restart, or an IP Vast.ai reuses, doesn't cause warnings. `vst destroy` removes the key.
+
+Instances without their own SSH port are reached through Vast.ai's SSH proxy.
+
+On Windows, vastly runs Windows' built-in OpenSSH -- the one VS Code uses -- even from Git Bash, so load your key into the Windows ssh-agent service (`ssh-add` in PowerShell), not Git Bash's agent.
+
 ## Git access on your instance
 
 To clone and push from an instance, vastly forwards your SSH agent by default. This is common practice, and your key is never copied to the instance -- but while you're connected, whoever controls the machine could use it to reach anything your key can access.
@@ -189,12 +200,14 @@ Good to know:
 
 ## Troubleshooting
 
-**"Missing: vastai CLI"** -- `pip install vastai`, then `vastai set api-key <key>`.
+**SSH connection timeout** -- Instance may still be booting. Setup retries 3 times. Run `vst list` to check status.
 
-**SSH connection timeout** -- Instance may still be booting. Setup retries 3 times. Run `vastai show instances` to check status.
+**"Its SSH host key has changed"** -- The instance answered with a different host key than the first time you connected. That's expected if you recycled or rebuilt it on the Vast.ai website: remove the old key with the `ssh-keygen -R ...` command vastly prints, then run `vst` again. Otherwise, don't connect.
+
+**"Couldn't verify Vast.ai's HTTPS certificate"** -- Your Python can't find CA certificates. With Python from python.org on macOS, run `Install Certificates.command` from its folder in Applications.
 
 **"Not in a git repo"** -- `vastly` reads the remote URL from your local repo. Run from inside a git repo, or use `vst --no-setup`.
 
 **"Cannot access repo"** -- For SSH remotes, check that your SSH agent is running and your key is loaded (`ssh-add -l`). For HTTPS remotes, you may need a personal access token or to switch to SSH. With a deploy key, run `vst -f` to recreate it, or `vst --git-auth agent` to use agent forwarding instead (see [Git access on your instance](#git-access-on-your-instance)).
 
-**"No Vast instances found"** -- vastly uses whichever Vast.ai account your API key belongs to. Run `vst config` to see which account is active, and `vastai set api-key <key>` to switch.
+**"No Vast instances found"** -- vastly uses whichever Vast.ai account your API key belongs to. Run `vst config` to see which account is active, and `vst config --api-key` to switch.

@@ -95,8 +95,12 @@ _CMD_HELP = {
         ],
     },
     "config": {
-        "usage": "vst config",
+        "usage": "vst config [--api-key]",
         "desc": "Show current configuration.",
+        "examples": [
+            ("vst config", "show settings and the active Vast.ai account"),
+            ("vst config --api-key", "enter a new Vast.ai API key"),
+        ],
     },
     "ssh": {
         "usage": "vst ssh [name] [command...]",
@@ -329,6 +333,9 @@ def _build_parser() -> tuple[
 
     # Config
     p = subparsers.add_parser("config", help="show current configuration")
+    p.add_argument(
+        "--api-key", action="store_true", help="set or change your Vast.ai API key"
+    )
     parsers["config"] = p
 
     # SSH

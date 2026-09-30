@@ -8,7 +8,6 @@ and verifying the orchestration logic for each conditional path.
 from __future__ import annotations
 
 import argparse
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -162,7 +161,7 @@ class TestDoConnectOrchestration:
         polled_ids = []
 
         monkeypatch.setattr(
-            "vastly.commands._vastai_start",
+            "vastly.commands._start",
             lambda inst: (started_ids.append(inst.id), False)[1],
         )
         monkeypatch.setattr(
@@ -191,7 +190,7 @@ class TestDoConnectOrchestration:
         _do_connect()
 
         assert started_ids == [1]
-        assert polled_ids == ["1"]
+        assert polled_ids == [1]
 
     def test_no_instances_raises(self, monkeypatch):
         """Empty sync result -> VastlyError."""
@@ -386,7 +385,7 @@ class TestDoConnectOrchestration:
 
         started_ids = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_start",
+            "vastly.commands._start",
             lambda inst: (started_ids.append(inst.id), False)[1],
         )
         monkeypatch.setattr(
@@ -475,7 +474,7 @@ class TestCmdStartOrchestration:
     """Tests for cmd_start -- state routing, polling, and auto-connect."""
 
     def test_happy_path_stopped_starts_polls_connects(self, monkeypatch):
-        """Stopped instance -> _vastai_start -> poll -> _do_connect."""
+        """Stopped instance -> _start -> poll -> _do_connect."""
         import vastly.commands
         from vastly.commands import cmd_start
 
@@ -487,7 +486,7 @@ class TestCmdStartOrchestration:
 
         started_ids = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_start",
+            "vastly.commands._start",
             lambda inst: (started_ids.append(inst.id), False)[1],
         )
 
@@ -496,13 +495,8 @@ class TestCmdStartOrchestration:
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
         monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [],
-                0,
-                stdout='{"cur_state": "running", "actual_status": "running"}',
-                stderr="",
-            ),
+            "vastly.commands.vast.get_instance",
+            lambda _id: {"id": _id, "cur_state": "running", "actual_status": "running"},
         )
 
         connect_kwargs = {}
@@ -534,7 +528,7 @@ class TestCmdStartOrchestration:
             cmd_start(args)
 
     def test_transitional_state_skips_start_call_waits(self, monkeypatch, capsys):
-        """Instance in 'loading' state -> skip _vastai_start, just poll."""
+        """Instance in 'loading' state -> skip _start, just poll."""
         import vastly.commands
         from vastly.commands import cmd_start
 
@@ -546,7 +540,7 @@ class TestCmdStartOrchestration:
 
         started_ids = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_start",
+            "vastly.commands._start",
             lambda inst: (started_ids.append(inst.id), False)[1],
         )
 
@@ -554,20 +548,15 @@ class TestCmdStartOrchestration:
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
         monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [],
-                0,
-                stdout='{"cur_state": "running", "actual_status": "running"}',
-                stderr="",
-            ),
+            "vastly.commands.vast.get_instance",
+            lambda _id: {"id": _id, "cur_state": "running", "actual_status": "running"},
         )
         monkeypatch.setattr("vastly.commands._do_connect", lambda **kw: None)
 
         args = argparse.Namespace(name=None, no_connect=False, verbose=False)
         cmd_start(args)
 
-        assert started_ids == []  # _vastai_start NOT called
+        assert started_ids == []  # _start NOT called
         output = capsys.readouterr().out
         assert "already starting" in output
 
@@ -580,7 +569,7 @@ class TestCmdStartOrchestration:
             "vastly.commands.get_synced_instances",
             lambda _: [_inst(name="gpu", id=1, status="stopped")],
         )
-        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("vastly.commands._start", lambda inst: False)
 
         polled = []
         monkeypatch.setattr(
@@ -600,7 +589,7 @@ class TestCmdStartOrchestration:
         assert connect_calls == []
 
     def test_exited_instance_starts(self, monkeypatch):
-        """Exited instances are in STOPPED_STATES and should call _vastai_start."""
+        """Exited instances are in STOPPED_STATES and should call _start."""
         from vastly.commands import cmd_start
 
         _patch_base(monkeypatch)
@@ -611,7 +600,7 @@ class TestCmdStartOrchestration:
 
         started_ids = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_start",
+            "vastly.commands._start",
             lambda inst: (started_ids.append(inst.id), False)[1],
         )
 
@@ -661,19 +650,14 @@ class TestCmdStartOrchestration:
             "vastly.commands.get_synced_instances",
             lambda _: [_inst(name="gpu", id=1, status="stopped", alias="train")],
         )
-        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("vastly.commands._start", lambda inst: False)
 
         monkeypatch.setattr("time.sleep", lambda _: None)
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
         monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [],
-                0,
-                stdout='{"cur_state": "running", "actual_status": "running"}',
-                stderr="",
-            ),
+            "vastly.commands.vast.get_instance",
+            lambda _id: {"id": _id, "cur_state": "running", "actual_status": "running"},
         )
 
         connect_kwargs = {}
@@ -696,7 +680,7 @@ class TestCmdDestroyOrchestration:
     """Tests for cmd_destroy -- confirmation, --yes flag, bulk operations."""
 
     def test_single_instance_confirmation_accepted(self, monkeypatch):
-        """Single instance + user confirms -> _vastai_destroy called."""
+        """Single instance + user confirms -> _destroy called."""
         from vastly.commands import cmd_destroy
 
         _patch_base(monkeypatch)
@@ -707,7 +691,7 @@ class TestCmdDestroyOrchestration:
 
         destroyed = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy",
+            "vastly.commands._destroy",
             lambda inst: destroyed.append(inst.name),
         )
         monkeypatch.setattr("vastly.commands._confirm", lambda prompt: True)
@@ -718,7 +702,7 @@ class TestCmdDestroyOrchestration:
         assert destroyed == ["gpu"]
 
     def test_single_instance_confirmation_declined(self, monkeypatch):
-        """Single instance + user declines -> _vastai_destroy NOT called."""
+        """Single instance + user declines -> _destroy NOT called."""
         from vastly.commands import cmd_destroy
 
         _patch_base(monkeypatch)
@@ -729,7 +713,7 @@ class TestCmdDestroyOrchestration:
 
         destroyed = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy",
+            "vastly.commands._destroy",
             lambda inst: destroyed.append(inst.name),
         )
         monkeypatch.setattr("vastly.commands._confirm", lambda prompt: False)
@@ -740,7 +724,7 @@ class TestCmdDestroyOrchestration:
         assert destroyed == []
 
     def test_yes_flag_skips_confirmation(self, monkeypatch):
-        """--yes flag -> _confirm NOT called, _vastai_destroy called."""
+        """--yes flag -> _confirm NOT called, _destroy called."""
         from vastly.commands import cmd_destroy
 
         _patch_base(monkeypatch)
@@ -751,7 +735,7 @@ class TestCmdDestroyOrchestration:
 
         destroyed = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy",
+            "vastly.commands._destroy",
             lambda inst: destroyed.append(inst.name),
         )
         # _confirm should NOT be called when yes=True
@@ -790,7 +774,7 @@ class TestCmdDestroyOrchestration:
 
         destroyed = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy",
+            "vastly.commands._destroy",
             lambda inst: destroyed.append(inst.name),
         )
 
@@ -818,7 +802,7 @@ class TestCmdDestroyOrchestration:
 
         destroyed = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy",
+            "vastly.commands._destroy",
             lambda inst: destroyed.append(inst.name),
         )
 
@@ -843,7 +827,7 @@ class TestCmdDestroyOrchestration:
 
         destroyed = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy",
+            "vastly.commands._destroy",
             lambda inst: destroyed.append(inst.name),
         )
         monkeypatch.setattr(
@@ -873,7 +857,7 @@ class TestCmdDestroyOrchestration:
 
         destroyed = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy",
+            "vastly.commands._destroy",
             lambda inst: destroyed.append(inst.name),
         )
         monkeypatch.setattr("vastly.commands._confirm", lambda prompt: True)
@@ -901,7 +885,7 @@ class TestCmdDestroyOrchestration:
 
         monkeypatch.setattr("vastly.commands._confirm", fake_confirm)
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy",
+            "vastly.commands._destroy",
             lambda inst: None,
         )
 

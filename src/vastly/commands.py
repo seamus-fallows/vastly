@@ -14,7 +14,7 @@ from difflib import get_close_matches
 from pathlib import Path, PurePosixPath
 
 import vastly
-from vastly import __version__, cyan, dim, gitauth, green, red, yellow
+from vastly import __version__, cyan, dim, gitauth, green, red, vast, yellow
 from vastly.config import (
     _PROJECT_KEYS,
     CONFIG_PATH,
@@ -24,7 +24,7 @@ from vastly.config import (
     load_config,
     project_commands,
 )
-from vastly.errors import VastlyError
+from vastly.errors import APIError, VastlyError
 from vastly.ide import check_ide, open_ide
 from vastly.instance import (
     NO_INSTANCES_MSG,
@@ -44,7 +44,14 @@ from vastly.instance import (
     validate_alias,
 )
 from vastly.remote import setup_instances
-from vastly.ssh import SSH_CONFIG_DIR, SSH_OPTS, run_scp, run_ssh
+from vastly.ssh import (
+    SSH_CONFIG_DIR,
+    SSH_OPTS,
+    forget_host_key,
+    run_scp,
+    run_ssh,
+    ssh_program,
+)
 
 
 def _git_root() -> Path | None:
@@ -75,11 +82,9 @@ def _check_prerequisites(
     """
     missing = []
 
-    if not shutil.which("vastai"):
-        missing.append("Missing: vastai CLI. Install with: pip install vastai")
     if need_git and not shutil.which("git"):
         missing.append("Missing: git.")
-    if not shutil.which("ssh"):
+    if not shutil.which(ssh_program("ssh")):
         missing.append("Missing: ssh.")
     if need_ide and not check_ide(ide):
         other = {"code": "cursor", "cursor": "code"}.get(ide)
@@ -156,58 +161,15 @@ def _confirm(prompt: str) -> bool:
     return True
 
 
-# ── Vastai wrappers ─────────────────────────────────────────────────
+# ── Vast.ai actions ─────────────────────────────────────────────────
 
 
-# vastai calls that change an instance; polling calls use _POLL_TIMEOUT
-_VASTAI_TIMEOUT = 60
-_POLL_TIMEOUT = 30
-
-
-def _vastai_action(action: str, inst: Instance) -> None:
-    """Run 'vastai stop/destroy instance <id>' and print result."""
-    try:
-        result = subprocess.run(
-            ["vastai", action, "instance", str(inst.id)],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=_VASTAI_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        raise VastlyError(
-            f"Timed out trying to {action} {inst.display_name}. "
-            "Check the Vast.ai dashboard."
-        ) from None
-    if result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
-        raise VastlyError(f"Failed to {action} {inst.display_name}: {msg}")
-
-    action_past = {"stop": "Stopped", "destroy": "Destroyed"}[action]
-    print(green(f"  {action_past} {inst.display_name}"))
-
-
-def _vastai_start(inst: Instance) -> bool:
+def _start(inst: Instance) -> bool:
     """Start an instance. Returns True if the start was queued (resources unavailable)."""
     try:
-        result = subprocess.run(
-            ["vastai", "start", "instance", str(inst.id)],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=_VASTAI_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        raise VastlyError(
-            f"Timed out trying to start {inst.display_name}. "
-            "Check the Vast.ai dashboard."
-        ) from None
-    if result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
-        raise VastlyError(f"Failed to start {inst.display_name}: {msg}")
-
-    output = (result.stdout + result.stderr).lower()
-    queued = "queued" in output or "unavailable" in output
+        queued = vast.start_instance(inst.id)
+    except APIError as e:
+        raise APIError(f"Failed to start {inst.display_name}: {e}") from None
     if queued:
         print(yellow(f"  Queued {inst.display_name} (waiting for resources)"))
     else:
@@ -215,52 +177,23 @@ def _vastai_start(inst: Instance) -> bool:
     return queued
 
 
-def _format_account(user: dict) -> str | None:
-    """Format 'vastai show user' data as 'username (email, team)'.
-
-    Returns None if the data has no username or email to identify the account.
-    """
-    name = user.get("username") or user.get("email")
-    if not name:
-        return None
-    details = []
-    if user.get("email") and user["email"] != name:
-        details.append(user["email"])
-    if user.get("is_team"):
-        details.append("team")
-    return f"{name} ({', '.join(details)})" if details else name
-
-
-def _vast_account() -> str:
-    """Describe the Vast.ai account that vastai's saved API key belongs to."""
-    unknown = "(unknown -- run 'vastai show user' to debug)"
-    if not shutil.which("vastai"):
-        return "(vastai CLI not installed)"
+def _stop(inst: Instance) -> None:
     try:
-        result = subprocess.run(
-            ["vastai", "show", "user", "--raw"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=15,
-        )
-    except subprocess.TimeoutExpired:
-        return "(unknown -- Vast.ai API timed out)"
-    if result.returncode != 0:
-        return "(unavailable -- no API key set, or network issue. Set one with: vastai set api-key <key>)"
+        vast.stop_instance(inst.id)
+    except APIError as e:
+        raise APIError(f"Failed to stop {inst.display_name}: {e}") from None
+    print(green(f"  Stopped {inst.display_name}"))
+
+
+def _destroy(inst: Instance) -> None:
+    """Destroy an instance and clean up its SSH config, alias, and keys."""
     try:
-        user = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return unknown
-    if not isinstance(user, dict):
-        return unknown
-    return _format_account(user) or unknown
-
-
-def _vastai_destroy(inst: Instance) -> None:
-    """Destroy an instance and clean up its SSH config, alias, and deploy keys."""
-    _vastai_action("destroy", inst)
+        vast.destroy_instance(inst.id)
+    except APIError as e:
+        raise APIError(f"Failed to destroy {inst.display_name}: {e}") from None
+    print(green(f"  Destroyed {inst.display_name}"))
     gitauth.remove_instance_keys(inst.id)
+    forget_host_key(inst.id)
 
     # Clean up SSH config for the destroyed instance
     config_file = SSH_CONFIG_DIR / inst.name
@@ -276,6 +209,17 @@ def _vastai_destroy(inst: Instance) -> None:
         alias_config = SSH_CONFIG_DIR / alias
         if alias_config.exists():
             alias_config.unlink()
+
+
+def _vast_account() -> str:
+    """Describe the Vast.ai account the API key belongs to."""
+    if not vast.saved_key():
+        return "(no API key yet -- vst will ask for one, or run: vst config --api-key)"
+    try:
+        user = vast.current_user()
+    except APIError as e:
+        return f"(unknown -- {e})"
+    return vast.account_label(user) or "(unknown)"
 
 
 _START_TIMEOUT = 300  # 5 minutes
@@ -299,10 +243,10 @@ def _start_and_resync(
         if inst.status in TRANSITIONAL_STATES:
             print(dim(f"  {inst.display_name} is already starting, waiting..."))
         else:
-            if _vastai_start(inst):
+            if _start(inst):
                 queued_ids.add(inst.id)
     for inst in to_start:
-        _poll_for_running(str(inst.id), inst.display_name, queued=inst.id in queued_ids)
+        _poll_for_running(inst.id, inst.display_name, queued=inst.id in queued_ids)
 
     all_instances = sync_instances(config)
     running = [i for i in all_instances if i.status == "running"]
@@ -314,7 +258,7 @@ def _start_and_resync(
 
 
 def _poll_for_running(
-    inst_id: str, display_name: str = "", *, queued: bool = False
+    inst_id: int, display_name: str = "", *, queued: bool = False
 ) -> None:
     """Poll the Vast.ai API until instance is running, or raise on timeout.
 
@@ -322,7 +266,7 @@ def _poll_for_running(
     the timeout is suspended -- queued starts can take hours and the user can
     Ctrl+C. The timeout resumes once the instance leaves the stopped state.
     """
-    label = display_name or inst_id
+    label = display_name or str(inst_id)
     deadline = time.monotonic() + _START_TIMEOUT
     last_status = "unknown"
     api_failures = 0
@@ -331,34 +275,14 @@ def _poll_for_running(
         time.sleep(_START_POLL_INTERVAL)
 
         try:
-            result = subprocess.run(
-                ["vastai", "show", "instance", inst_id, "--raw"],
-                capture_output=True,
-                text=True,
-                errors="replace",
-                timeout=_POLL_TIMEOUT,
-            )
-        except subprocess.TimeoutExpired:
-            # Counts as an API failure below
-            result = subprocess.CompletedProcess([], 1, "", "vastai timed out")
-        if result.returncode != 0:
+            data = vast.get_instance(inst_id)
+        except APIError as e:
             api_failures += 1
             if api_failures >= _MAX_POLL_FAILURES:
-                msg = result.stderr.strip() or result.stdout.strip() or "unknown error"
-                raise VastlyError(
-                    f"Cannot reach Vast.ai API while waiting for {label}: {msg}"
-                )
+                raise APIError(f"Gave up waiting for {label}: {e}") from None
             continue
-
-        try:
-            data = json.loads(result.stdout)
-        except (json.JSONDecodeError, TypeError):
-            api_failures += 1
-            if api_failures >= _MAX_POLL_FAILURES:
-                raise VastlyError(
-                    f"Vast.ai API returning invalid data while waiting for {label}."
-                )
-            continue
+        if data is None:
+            raise VastlyError(f"{label} no longer exists on Vast.ai.")
 
         api_failures = 0
 
@@ -633,7 +557,7 @@ def cmd_stop(args: argparse.Namespace) -> None:
                 return
 
     for inst in selected:
-        _vastai_action("stop", inst)
+        _stop(inst)
 
 
 def cmd_destroy(args: argparse.Namespace) -> None:
@@ -663,7 +587,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
                 return
 
     for inst in selected:
-        _vastai_destroy(inst)
+        _destroy(inst)
 
 
 def _copy_one(
@@ -805,7 +729,7 @@ def cmd_start(args: argparse.Namespace) -> None:
 
         queued = False
         if inst.status in STOPPED_STATES:
-            queued = _vastai_start(inst)
+            queued = _start(inst)
         elif inst.status in TRANSITIONAL_STATES:
             print(dim(f"  {inst.display_name} is already starting, waiting..."))
         else:
@@ -814,7 +738,7 @@ def cmd_start(args: argparse.Namespace) -> None:
             )
 
         if not args.no_connect:
-            _poll_for_running(str(inst.id), inst.display_name, queued=queued)
+            _poll_for_running(inst.id, inst.display_name, queued=queued)
 
     if args.no_connect:
         return
@@ -839,7 +763,14 @@ def _git_auth_preview(config: Config) -> str:
 
 
 def cmd_config(args: argparse.Namespace) -> None:
-    """Show resolved configuration."""
+    """Show resolved configuration, or set the Vast.ai API key (--api-key)."""
+    if getattr(args, "api_key", False):
+        vast.ask_for_key()
+        if os.environ.get("VAST_API_KEY"):
+            print(
+                yellow("  Note: VAST_API_KEY is set, so vastly keeps using that key.")
+            )
+        return
 
     git_root = _git_root()
     config = load_config(project_dir=git_root)
@@ -882,7 +813,7 @@ def cmd_config(args: argparse.Namespace) -> None:
     for key, val, desc in rows:
         print(f"  {green(key.ljust(key_w))}  {val.ljust(val_w)}  {dim(desc)}")
 
-    # Which account vastai's saved API key belongs to (personal vs team matters)
+    # Which account the API key belongs to (personal vs team matters)
     print(f"\n{cyan('vast account:')} {_vast_account()}")
 
     if git_root and config["gitAuth"] != "agent":
@@ -1010,18 +941,18 @@ def cmd_ssh(args: argparse.Namespace) -> None:
 
     if len(selected) == 1 and not remote_cmd:
         # Interactive SSH -- replace the process for native terminal behavior
-        ssh_cmd = ["ssh", *SSH_OPTS, selected[0].name]
+        ssh_cmd = [ssh_program("ssh"), *SSH_OPTS, selected[0].name]
         vastly.verbose(f"ssh command: {' '.join(ssh_cmd)}")
         if sys.platform == "win32":
             result = subprocess.run(ssh_cmd)
             sys.exit(result.returncode)
         else:
-            os.execvp("ssh", ssh_cmd)
+            os.execvp(ssh_cmd[0], ssh_cmd)
     else:
         # Run command on one or more instances
         failed = 0
         for inst in selected:
-            ssh_cmd = ["ssh", *SSH_OPTS, inst.name, *remote_cmd]
+            ssh_cmd = [ssh_program("ssh"), *SSH_OPTS, inst.name, *remote_cmd]
             vastly.verbose(f"ssh command: {' '.join(ssh_cmd)}")
             if len(selected) > 1:
                 print(green(f"  -- {inst.display_name} --"))

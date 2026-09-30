@@ -1,9 +1,8 @@
-"""Tests for vastly.instance -- fetch, sync, display, and selection."""
+"""Tests for vastly.instance -- sync, display, and selection."""
 
 from __future__ import annotations
 
 import json
-import subprocess
 
 import pytest
 from conftest import make_api_instance, make_test_config
@@ -13,76 +12,55 @@ from vastly.errors import APIError, VastlyError
 from vastly.instance import (
     Instance,
     build_instance_name,
-    fetch_instances,
     get_running_instances,
     get_synced_instances,
     load_aliases,
     save_aliases,
     select_instance,
     show_table,
+    ssh_address,
     sync_instances,
     validate_alias,
 )
 
 
-class TestFetchInstances:
-    def test_returns_list_on_success(self, monkeypatch):
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *a, **_kw: subprocess.CompletedProcess(
-                a[0], 0, stdout='[{"id": 1}]', stderr=""
-            ),
-        )
-        assert fetch_instances() == [{"id": 1}]
+class TestSshAddress:
+    def test_direct_port(self):
+        assert ssh_address(make_api_instance(1)) == ("10.0.0.1", 22001)
 
-    def test_raises_on_nonzero_exit_with_stderr(self, monkeypatch):
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *a, **_kw: subprocess.CompletedProcess(
-                a[0], 1, stdout="", stderr="auth error"
-            ),
-        )
-        with pytest.raises(APIError, match="auth error"):
-            fetch_instances()
+    def test_strips_whitespace_around_the_ip(self):
+        inst = make_api_instance(1, public_ipaddr=" 10.0.0.1\n")
+        assert ssh_address(inst) == ("10.0.0.1", 22001)
 
-    def test_raises_api_key_hint_when_stderr_empty(self, monkeypatch):
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *a, **_kw: subprocess.CompletedProcess(
-                a[0], 1, stdout="", stderr=""
-            ),
+    def test_falls_back_to_vasts_proxy(self):
+        inst = make_api_instance(
+            1,
+            ports={},
+            actual_status="running",
+            ssh_host="ssh4.vast.ai",
+            ssh_port=31234,
         )
-        with pytest.raises(APIError, match="API key"):
-            fetch_instances()
+        assert ssh_address(inst) == ("ssh4.vast.ai", 31234)
 
-    def test_raises_on_invalid_json(self, monkeypatch):
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *a, **_kw: subprocess.CompletedProcess(
-                a[0], 0, stdout="not json", stderr=""
-            ),
+    def test_direct_port_preferred_over_proxy(self):
+        inst = make_api_instance(
+            1, actual_status="running", ssh_host="ssh4.vast.ai", ssh_port=31234
         )
-        with pytest.raises(APIError, match="invalid data"):
-            fetch_instances()
+        assert ssh_address(inst) == ("10.0.0.1", 22001)
 
-    def test_raises_when_json_is_object(self, monkeypatch):
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *a, **_kw: subprocess.CompletedProcess(
-                a[0], 0, stdout='{"error": "msg"}', stderr=""
-            ),
+    def test_proxy_waits_for_the_container(self):
+        """The proxy address exists before the container runs."""
+        inst = make_api_instance(
+            1,
+            ports={},
+            actual_status="loading",
+            ssh_host="ssh4.vast.ai",
+            ssh_port=31234,
         )
-        with pytest.raises(APIError, match="invalid data"):
-            fetch_instances()
+        assert ssh_address(inst) is None
 
-    def test_returns_empty_list(self, monkeypatch):
-        monkeypatch.setattr(
-            "subprocess.run",
-            lambda *a, **_kw: subprocess.CompletedProcess(
-                a[0], 0, stdout="[]", stderr=""
-            ),
-        )
-        assert fetch_instances() == []
+    def test_none_without_any_address(self):
+        assert ssh_address(make_api_instance(1, ports={"22/tcp": []})) is None
 
 
 class TestSyncInstances:
@@ -110,7 +88,7 @@ class TestSyncInstances:
         gitauth.record_deploy_key(1, "o/r", 42, account=1)
         writes = self._capture_ssh_writes(monkeypatch)
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances", lambda: [make_api_instance(1)]
+            "vastly.instance.list_instances", lambda: [make_api_instance(1)]
         )
         sync_instances(make_test_config(gitAuth=mode))
         assert writes["1xrtx4090-tw"]["forward_agent"] is expected
@@ -118,7 +96,7 @@ class TestSyncInstances:
     def test_unknown_instances_keep_forwarding(self, monkeypatch):
         writes = self._capture_ssh_writes(monkeypatch)
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances", lambda: [make_api_instance(1)]
+            "vastly.instance.list_instances", lambda: [make_api_instance(1)]
         )
         sync_instances(make_test_config(gitAuth="auto"))
         assert writes["1xrtx4090-tw"]["forward_agent"] is True
@@ -128,14 +106,14 @@ class TestSyncInstances:
 
         gitauth.record_agent(5, account=None)
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances", lambda: [make_api_instance(1)]
+            "vastly.instance.list_instances", lambda: [make_api_instance(1)]
         )
         sync_instances(make_test_config())
         assert "5" not in gitauth.load_state()
 
     def test_syncs_running_instances(self, monkeypatch):
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances", lambda: [make_api_instance(1)]
+            "vastly.instance.list_instances", lambda: [make_api_instance(1)]
         )
         result = sync_instances(make_test_config())
         running = [i for i in result if i.status == "running"]
@@ -144,7 +122,7 @@ class TestSyncInstances:
 
     def test_returns_all_instances_including_non_running(self, monkeypatch):
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances",
+            "vastly.instance.list_instances",
             lambda: [
                 make_api_instance(1),
                 make_api_instance(2, "exited"),
@@ -157,7 +135,7 @@ class TestSyncInstances:
 
     def test_running_without_port_22_uses_actual_status(self, monkeypatch):
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances",
+            "vastly.instance.list_instances",
             lambda: [make_api_instance(1, ports={}, actual_status="loading")],
         )
         result = sync_instances(make_test_config())
@@ -166,24 +144,47 @@ class TestSyncInstances:
 
     def test_running_with_malformed_ports_uses_actual_status(self, monkeypatch):
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances",
+            "vastly.instance.list_instances",
             lambda: [make_api_instance(1, ports={"22/tcp": []})],  # empty list
         )
         result = sync_instances(make_test_config())
         assert len(result) == 1
         assert result[0].status == "loading"  # default when actual_status missing
 
+    def test_instance_without_ssh_port_connects_through_the_proxy(self, monkeypatch):
+        writes = self._capture_ssh_writes(monkeypatch)
+        proxied = make_api_instance(
+            1,
+            ports={},
+            actual_status="running",
+            ssh_host="ssh4.vast.ai",
+            ssh_port=31234,
+        )
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: [proxied])
+        result = sync_instances(make_test_config())
+        assert result[0].status == "running"
+        written = writes["1xrtx4090-tw"]
+        assert (written["host"], written["port"]) == ("ssh4.vast.ai", 31234)
+
+    def test_configs_name_their_instance(self, monkeypatch):
+        writes = self._capture_ssh_writes(monkeypatch)
+        monkeypatch.setattr(
+            "vastly.instance.list_instances", lambda: [make_api_instance(7)]
+        )
+        sync_instances(make_test_config())
+        assert writes["1xrtx4090-tw"]["inst_id"] == 7
+
     def test_raises_when_api_fails(self, monkeypatch):
         def raise_api_error():
             raise APIError("timeout")
 
-        monkeypatch.setattr("vastly.instance.fetch_instances", raise_api_error)
+        monkeypatch.setattr("vastly.instance.list_instances", raise_api_error)
         with pytest.raises(APIError):
             sync_instances(make_test_config())
 
     def test_non_running_instances_included_in_results(self, monkeypatch):
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances",
+            "vastly.instance.list_instances",
             lambda: [make_api_instance(1, "exited")],
         )
         result = sync_instances(make_test_config())
@@ -193,7 +194,7 @@ class TestSyncInstances:
     def test_port_forwards_avoid_collisions(self, monkeypatch):
         """Two instances with the same configured port should get different local ports."""
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances",
+            "vastly.instance.list_instances",
             lambda: [
                 make_api_instance(1, geo="City, US"),
                 make_api_instance(2, geo="City, DE"),
@@ -212,7 +213,7 @@ class TestSyncInstances:
 
     def test_passes_config_values_to_write(self, monkeypatch):
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances", lambda: [make_api_instance(1)]
+            "vastly.instance.list_instances", lambda: [make_api_instance(1)]
         )
         writes = []
         monkeypatch.setattr(
@@ -273,11 +274,10 @@ class TestShowTable:
 _MINIMAL_CONFIG = make_test_config(portForwards=[])
 
 
-def _make_api_response(*instances):
-    """Build a fake subprocess.run result returning JSON instance data."""
-    return subprocess.CompletedProcess(
-        [], 0, stdout=json.dumps(list(instances)), stderr=""
-    )
+def _vast_api_listing(*instances):
+    """A fake Vast.ai API (vast._send) whose instance list is *instances*."""
+    body = json.dumps({"instances": list(instances)}).encode()
+    return lambda method, url, data, key: (200, body)
 
 
 # ── TestSelectInstance ───────────────────────────────────────────────
@@ -577,7 +577,7 @@ class TestSyncInstancesLifecycle:
             make_api_instance(2, "stopped"),
             make_api_instance(3, "exited"),
         ]
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: api_data)
 
         results = sync_instances(_MINIMAL_CONFIG)
 
@@ -590,7 +590,7 @@ class TestSyncInstancesLifecycle:
             make_api_instance(1, "running"),
             make_api_instance(2, "stopped"),
         ]
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: api_data)
 
         ssh_dir = tmp_path / "ssh"
         results = sync_instances(_MINIMAL_CONFIG)
@@ -608,7 +608,7 @@ class TestSyncInstancesLifecycle:
             make_api_instance(1, "stopped"),
             make_api_instance(2, "exited"),
         ]
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: api_data)
 
         results = sync_instances(_MINIMAL_CONFIG)
 
@@ -620,7 +620,7 @@ class TestSyncInstancesLifecycle:
         aliases_file.write_text('{"1": "train"}', encoding="utf-8")
 
         api_data = [make_api_instance(1, "stopped")]
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: api_data)
 
         results = sync_instances(_MINIMAL_CONFIG)
 
@@ -634,7 +634,7 @@ class TestSyncInstancesLifecycle:
         aliases_file.write_text('{"1": "train", "999": "gone"}', encoding="utf-8")
 
         api_data = [make_api_instance(1, "stopped")]
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: api_data)
 
         sync_instances(_MINIMAL_CONFIG)
 
@@ -647,7 +647,7 @@ class TestSyncInstancesLifecycle:
         aliases_file.write_text('{"1": "train"}', encoding="utf-8")
 
         monkeypatch.setattr(
-            "vastly.instance.fetch_instances",
+            "vastly.instance.list_instances",
             lambda: (_ for _ in ()).throw(APIError("down")),
         )
 
@@ -664,7 +664,7 @@ class TestSyncInstancesLifecycle:
             make_api_instance(1, "running"),
             make_api_instance(2, "stopped"),
         ]
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: api_data)
 
         results = sync_instances(_MINIMAL_CONFIG)
 
@@ -680,7 +680,7 @@ class TestSyncInstancesLifecycle:
             make_api_instance(1, "stopped"),
             make_api_instance(2, "exited"),
         ]
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: api_data)
 
         results = sync_instances(_MINIMAL_CONFIG)
 
@@ -707,7 +707,7 @@ class TestGetRunningInstances:
             make_api_instance(1, "running"),
             make_api_instance(2, "stopped"),
         ]
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: api_data)
 
         results = get_running_instances(_MINIMAL_CONFIG)
 
@@ -719,13 +719,13 @@ class TestGetRunningInstances:
             make_api_instance(1, "stopped"),
             make_api_instance(2, "exited"),
         ]
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: api_data)
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: api_data)
 
         with pytest.raises(VastlyError, match="2 inactive.*vst start"):
             get_running_instances(_MINIMAL_CONFIG)
 
     def test_raises_no_instances_when_empty(self, monkeypatch):
-        monkeypatch.setattr("vastly.instance.fetch_instances", lambda: [])
+        monkeypatch.setattr("vastly.instance.list_instances", lambda: [])
 
         with pytest.raises(VastlyError, match="No Vast instances found"):
             get_running_instances(_MINIMAL_CONFIG)
@@ -849,7 +849,7 @@ class TestShowTableMixedStates:
 
 
 class TestSyncInstancesIntegration:
-    """Integration tests for sync_instances with mocked subprocess."""
+    """Integration tests for sync_instances with a fake Vast.ai API."""
 
     @pytest.fixture(autouse=True)
     def _isolate(self, tmp_path, monkeypatch):
@@ -884,10 +884,7 @@ class TestSyncInstancesIntegration:
                 "ports": {"22/tcp": [{"HostPort": "22033"}]},
             },
         ]
-        monkeypatch.setattr(
-            "vastly.instance.subprocess.run",
-            lambda *_a, **_kw: _make_api_response(*api_data),
-        )
+        monkeypatch.setattr("vastly.vast._send", _vast_api_listing(*api_data))
 
         results = sync_instances(_MINIMAL_CONFIG)
 
@@ -923,10 +920,7 @@ class TestSyncInstancesIntegration:
                 "ports": {"22/tcp": [{"HostPort": "22033"}]},
             },
         ]
-        monkeypatch.setattr(
-            "vastly.instance.subprocess.run",
-            lambda *_a, **_kw: _make_api_response(*api_data),
-        )
+        monkeypatch.setattr("vastly.vast._send", _vast_api_listing(*api_data))
 
         results = sync_instances(_MINIMAL_CONFIG)
 
@@ -955,10 +949,7 @@ class TestSyncInstancesIntegration:
                 "ports": {"22/tcp": [{"HostPort": "22022"}]},
             },
         ]
-        monkeypatch.setattr(
-            "vastly.instance.subprocess.run",
-            lambda *_a, **_kw: _make_api_response(*api_data),
-        )
+        monkeypatch.setattr("vastly.vast._send", _vast_api_listing(*api_data))
 
         results = sync_instances(_MINIMAL_CONFIG)
 
@@ -969,21 +960,6 @@ class TestSyncInstancesIntegration:
         saved = json.loads(self.aliases_file.read_text(encoding="utf-8"))
         assert "100" in saved
         assert "999" not in saved
-
-
-# ── TestFetchInstancesTimeout ────────────────────────────────────────
-
-
-class TestFetchInstancesTimeout:
-    """Test that fetch_instances has a timeout."""
-
-    def test_timeout_raises_api_error(self, monkeypatch):
-        def timeout_run(*a, **kw):
-            raise subprocess.TimeoutExpired(cmd=["vastai"], timeout=30)
-
-        monkeypatch.setattr("vastly.instance.subprocess.run", timeout_run)
-        with pytest.raises(APIError, match="timed out"):
-            fetch_instances()
 
 
 # ── TestStateConstants ───────────────────────────────────────────────

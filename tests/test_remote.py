@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import io
 import json
 import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
+import types
 from pathlib import Path
 
 import pytest
 from conftest import make_test_config
 from conftest import make_test_instance as _inst
 
-from vastly.remote import _PROBE_SEP, setup_instances
+from vastly.remote import _PROBE_SEP, _upload, setup_instances
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "vastly"
@@ -42,7 +45,7 @@ def _find_bash() -> str | None:
 
 def _setup_args(remote_cmd: str) -> list[str]:
     """Positional args passed to setup-remote.sh in a setup SSH command."""
-    quoted = remote_cmd.split("bash /tmp/_vastly-setup.sh ", 1)[1].split("; e=$?", 1)[0]
+    quoted = remote_cmd.split("setup-remote.sh ", 1)[1].split("; e=$?", 1)[0]
     return shlex.split(quoted)
 
 
@@ -100,13 +103,8 @@ class TestSetupInstances:
 
         return mock
 
-    def _make_scp_mock(self, *, success=True):
-        def mock(src, dest, **kwargs):
-            return subprocess.CompletedProcess(
-                [], 0 if success else 1, stdout="", stderr=""
-            )
-
-        return mock
+    def _make_upload_mock(self, *, success=True):
+        return lambda host, script, files: success
 
     def _base_config(self):
         return {
@@ -120,7 +118,7 @@ class TestSetupInstances:
 
     def test_successful_setup(self, monkeypatch):
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         result = setup_instances(
             [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
@@ -130,17 +128,40 @@ class TestSetupInstances:
         monkeypatch.setattr(
             "vastly.remote.run_ssh", self._make_ssh_mock(reachable=False)
         )
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         result = setup_instances(
             [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
         assert result == []
 
+    def test_changed_host_key_is_explained_not_retried(self, monkeypatch, capsys):
+        probes = []
+
+        def refused(host, command, **kwargs):
+            probes.append(command)
+            return subprocess.CompletedProcess(
+                [], 255, stdout="", stderr="Host key verification failed.\r\n"
+            )
+
+        monkeypatch.setattr("vastly.remote.run_ssh", refused)
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
+        result = setup_instances(
+            [_inst("gpu-1", inst_id=42)],
+            "git@github.com:u/r.git",
+            "r",
+            self._base_config(),
+        )
+        assert result == []
+        assert len(probes) == 1
+        out = capsys.readouterr().out
+        assert "host key has changed" in out
+        assert "ssh-keygen -R vastly-42" in out
+
     def test_already_setup_succeeds_without_running(self, monkeypatch):
         monkeypatch.setattr(
             "vastly.remote.run_ssh", self._make_ssh_mock(already_setup=True)
         )
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         result = setup_instances(
             [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
@@ -155,7 +176,7 @@ class TestSetupInstances:
             return base_mock(host, command, **kwargs)
 
         monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         setup_instances(
             [_inst("gpu-1")],
             "git@github.com:u/r.git",
@@ -168,7 +189,7 @@ class TestSetupInstances:
     def test_missing_git_identity_skips(self, monkeypatch):
         self._git_responses.clear()
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         result = setup_instances(
             [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
@@ -184,7 +205,7 @@ class TestSetupInstances:
 
         monkeypatch.setattr("subprocess.run", recording_run)
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         setup_instances(
             [_inst("gpu-1")],
             "git@github.com:u/r.git",
@@ -198,9 +219,11 @@ class TestSetupInstances:
         ]
         assert all(cwd == tmp_path for _, cwd in git_calls)
 
-    def test_scp_failure_skips(self, monkeypatch):
+    def test_upload_failure_skips(self, monkeypatch):
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock(success=False))
+        monkeypatch.setattr(
+            "vastly.remote._upload", self._make_upload_mock(success=False)
+        )
         result = setup_instances(
             [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
@@ -208,7 +231,7 @@ class TestSetupInstances:
 
     def test_setup_script_nonzero_exit_skips(self, monkeypatch):
         monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock(setup_rc=1))
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         result = setup_instances(
             [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
@@ -225,7 +248,7 @@ class TestSetupInstances:
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", mixed_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         result = setup_instances(
             [_inst("ok-gpu"), _inst("fail-gpu")],
             "git@github.com:u/r.git",
@@ -244,7 +267,7 @@ class TestSetupInstances:
             return base_mock(host, command, **kwargs)
 
         monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         config = {**self._base_config(), "postInstall": ["pip install black"]}
         setup_instances([_inst("gpu-1")], "git@github.com:u/r.git", "r", config)
         assert setup_cmds
@@ -261,7 +284,7 @@ class TestSetupInstances:
             return base_mock(host, command, **kwargs)
 
         monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         setup_instances(
             [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
@@ -278,7 +301,7 @@ class TestSetupInstances:
             return base_mock(host, command, **kwargs)
 
         monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         # disableAutoTmux: True -> "true"
         setup_instances(
             [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
@@ -290,20 +313,28 @@ class TestSetupInstances:
         setup_instances([_inst("gpu-1")], "git@github.com:u/r.git", "r", config)
         assert "false" in setup_cmds[0]
 
-    def test_copy_files_directory_targets_parent(self, monkeypatch, tmp_path):
-        """copyFiles dirs are copied into their parent, so vst -f doesn't nest them."""
+    def test_copy_files_go_into_the_repo_after_setup(self, monkeypatch, tmp_path):
+        """copyFiles travel with the setup script and are merged into the repo."""
         (tmp_path / ".claude").mkdir()
         (tmp_path / "cfg" / "sub").mkdir(parents=True)
         (tmp_path / ".env").write_text("X=1")
-        scp_calls = []
+        uploads, setup_cmds = [], []
+        base_ssh = self._make_ssh_mock()
 
-        def recording_scp(src, dest, **kwargs):
-            scp_calls.append((src, dest))
-            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        def recording_ssh(host, command, **kwargs):
+            if "setup-remote.sh" in command:
+                setup_cmds.append(command)
+            return base_ssh(host, command, **kwargs)
 
-        monkeypatch.setattr("vastly.remote.run_ssh", self._make_ssh_mock())
-        monkeypatch.setattr("vastly.remote.run_scp", recording_scp)
-        config = {**self._base_config(), "copyFiles": [".claude/", "cfg/sub", ".env"]}
+        monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
+        monkeypatch.setattr(
+            "vastly.remote._upload",
+            lambda host, script, files: uploads.append((host, files)) or True,
+        )
+        config = {
+            **self._base_config(),
+            "copyFiles": [".claude/", "cfg\\sub", ".env", "missing.txt", "../x"],
+        }
         setup_instances(
             [_inst("gpu-1")],
             "git@github.com:u/r.git",
@@ -311,12 +342,19 @@ class TestSetupInstances:
             config,
             project_dir=tmp_path,
         )
-        copies = scp_calls[1:]  # the first scp is the setup script
-        assert copies == [
-            (str(tmp_path / ".claude"), "gpu-1:/workspace/r/"),
-            (str(tmp_path / "cfg" / "sub"), "gpu-1:/workspace/r/cfg/"),
-            (str(tmp_path / ".env"), "gpu-1:/workspace/r/.env"),
+        assert uploads == [
+            (
+                "gpu-1",
+                [
+                    (tmp_path / ".claude", ".claude"),
+                    (tmp_path / "cfg/sub", "cfg/sub"),
+                    (tmp_path / ".env", ".env"),
+                ],
+            )
         ]
+        # Copied (merged, never nested) only once setup has cloned the repo
+        assert "cp -a /tmp/vastly-setup/files/. /workspace/r/" in setup_cmds[0]
+        assert setup_cmds[0].index("setup-remote.sh") < setup_cmds[0].index("cp -a")
 
     # ── Git access (gitAuth) ──
 
@@ -349,7 +387,7 @@ class TestSetupInstances:
 
         forwards = []
         monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         self.blocker_calls = []
         monkeypatch.setattr(
             "vastly.gitauth.deploy_key_blocker",
@@ -396,7 +434,7 @@ class TestSetupInstances:
             return base_mock(host, command, **kwargs)
 
         monkeypatch.setattr("vastly.remote.run_ssh", recording_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", self._make_scp_mock())
+        monkeypatch.setattr("vastly.remote._upload", self._make_upload_mock())
         result = setup_instances(
             [_inst("gpu-1")], "git@github.com:u/r.git", "r", self._base_config()
         )
@@ -497,6 +535,104 @@ class TestSetupInstances:
 
 
 # ── TestSetupRemoteScript ────────────────────────────────────────────
+
+
+class _CapturedStdin(io.BytesIO):
+    """A pipe that keeps what was written to it after it's closed."""
+
+    def close(self):
+        self.data = self.getvalue()
+        super().close()
+
+
+class _BrokenStdin(_CapturedStdin):
+    """The pipe to an ssh that has already exited."""
+
+    def write(self, data):
+        raise BrokenPipeError
+
+
+class TestUpload:
+    """_upload streams the setup script and copyFiles as one tar archive."""
+
+    @pytest.fixture
+    def ssh(self, monkeypatch):
+        """Stand-in for the ssh process: records its command and what's streamed to it."""
+        fake = types.SimpleNamespace(procs=[], returncode=0, stdin=_CapturedStdin)
+
+        class FakeSsh:
+            def __init__(self, cmd, **kwargs):
+                self.cmd = cmd
+                self.stdin = fake.stdin()
+                fake.procs.append(self)
+
+            def wait(self, timeout=None):
+                return fake.returncode
+
+        monkeypatch.setattr("vastly.remote.subprocess.Popen", FakeSsh)
+        return fake
+
+    @staticmethod
+    def _tar(proc) -> tarfile.TarFile:
+        return tarfile.open(fileobj=io.BytesIO(proc.stdin.data))
+
+    @pytest.fixture
+    def script(self, tmp_path):
+        path = tmp_path / "setup-remote.sh"
+        path.write_bytes(b"#!/usr/bin/env bash\r\necho hi\r\n")
+        return path
+
+    def test_one_connection_carries_everything(self, ssh, script, tmp_path):
+        (tmp_path / "cfg").mkdir()
+        (tmp_path / "cfg" / "a.yaml").write_text("a: 1")
+        (tmp_path / ".env").write_text("X=1")
+
+        files = [(tmp_path / "cfg", "cfg"), (tmp_path / ".env", ".env")]
+        assert _upload("gpu-1", script, files) is True
+
+        [proc] = ssh.procs
+        assert proc.cmd[-2] == "gpu-1"
+        assert "tar -xf - -C /tmp/vastly-setup" in proc.cmd[-1]
+        with self._tar(proc) as tar:
+            assert set(tar.getnames()) == {
+                "setup-remote.sh",
+                "files/cfg",
+                "files/cfg/a.yaml",
+                "files/.env",
+            }
+            # Unix line endings, whatever git did to the script on Windows
+            script_data = tar.extractfile("setup-remote.sh").read()
+            assert script_data == b"#!/usr/bin/env bash\necho hi\n"
+
+    def test_files_belong_to_the_ssh_user_with_plain_modes(self, ssh, script, tmp_path):
+        (tmp_path / "d").mkdir()
+        (tmp_path / "d" / "f").write_text("x")
+
+        _upload("gpu-1", script, [(tmp_path / "d", "d")])
+
+        with self._tar(ssh.procs[0]) as tar:
+            members = {m.name: m for m in tar.getmembers()}
+        assert all(m.uid == 0 and m.uname == "root" for m in members.values())
+        assert members["files/d"].mode == 0o755
+        assert members["files/d/f"].mode == 0o644
+
+    def test_ssh_failure_is_reported(self, ssh, script):
+        ssh.returncode = 255
+        assert _upload("gpu-1", script, []) is False
+
+    def test_unreadable_copy_file_is_named(self, ssh, script, monkeypatch, capsys):
+        def unreadable(*args, **kwargs):
+            raise PermissionError(13, "Permission denied", "secret.env")
+
+        monkeypatch.setattr("tarfile.TarFile.add", unreadable)
+        ssh.returncode = 2  # tar on the instance gets a cut-off archive
+
+        assert _upload("gpu-1", script, [(script, "secret.env")]) is False
+        assert "Can't read secret.env" in capsys.readouterr().out
+
+    def test_ssh_exiting_early_is_reported(self, ssh, script):
+        ssh.stdin, ssh.returncode = _BrokenStdin, 255
+        assert _upload("gpu-1", script, []) is False
 
 
 class TestSetupRemoteScript:
@@ -638,7 +774,9 @@ class TestSetupMarker:
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            "vastly.remote._upload", lambda *_a: pytest.fail("uploaded")
+        )
 
         instances = [_inst(name="1xA100-US")]
         config = make_test_config()
@@ -666,7 +804,9 @@ class TestSetupMarker:
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            "vastly.remote._upload", lambda *_a: pytest.fail("uploaded")
+        )
 
         instances = [_inst(name="1xA100-US")]
         config = make_test_config()
@@ -688,14 +828,14 @@ class TestSetupMarker:
                 )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
-        scp_calls = []
+        uploads = []
 
-        def fake_scp(*args, **kwargs):
-            scp_calls.append(args)
-            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        def fake_upload(*args):
+            uploads.append(args)
+            return True
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
+        monkeypatch.setattr("vastly.remote._upload", fake_upload)
         monkeypatch.setattr(
             "vastly.remote.subprocess.run",
             lambda *_a, **_kw: subprocess.CompletedProcess(
@@ -710,7 +850,7 @@ class TestSetupMarker:
             instances, "git@github.com:user/app.git", "app", config
         )
 
-        assert len(scp_calls) > 0
+        assert uploads
 
 
 # ── TestRepoMismatchWarning ──────────────────────────────────────────
@@ -762,7 +902,9 @@ class TestRepoMismatchWarning:
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            "vastly.remote._upload", lambda *_a: pytest.fail("uploaded")
+        )
         monkeypatch.setattr("builtins.input", lambda _: "n")
 
         instances = [_inst(name="1xA100-US")]
@@ -785,14 +927,14 @@ class TestRepoMismatchWarning:
                 )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
-        scp_calls = []
+        uploads = []
 
-        def fake_scp(*args, **kwargs):
-            scp_calls.append(args)
-            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        def fake_upload(*args):
+            uploads.append(args)
+            return True
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
+        monkeypatch.setattr("vastly.remote._upload", fake_upload)
         monkeypatch.setattr("builtins.input", lambda _: "y")
         monkeypatch.setattr(
             "vastly.remote.subprocess.run",
@@ -809,7 +951,7 @@ class TestRepoMismatchWarning:
         )
 
         # Setup should have proceeded (SCP'd the setup script)
-        assert len(scp_calls) > 0
+        assert uploads
 
     def test_no_mismatch_warning_on_fresh_instance(self, monkeypatch):
         """When no markers exist at all, setup should proceed without prompting."""
@@ -823,14 +965,14 @@ class TestRepoMismatchWarning:
                 )
             return subprocess.CompletedProcess([], 0, stdout="", stderr="")
 
-        scp_calls = []
+        uploads = []
 
-        def fake_scp(*args, **kwargs):
-            scp_calls.append(args)
-            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        def fake_upload(*args):
+            uploads.append(args)
+            return True
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", fake_scp)
+        monkeypatch.setattr("vastly.remote._upload", fake_upload)
         # input should NOT be called -- if it is, this will fail
         monkeypatch.setattr(
             "builtins.input",
@@ -851,7 +993,7 @@ class TestRepoMismatchWarning:
         )
 
         # Setup should proceed without prompting
-        assert len(scp_calls) > 0
+        assert uploads
 
     def test_mismatch_warning_eof_skips(self, monkeypatch):
         """When input raises EOFError (piped/non-interactive), instance is skipped."""
@@ -868,7 +1010,9 @@ class TestRepoMismatchWarning:
             raise EOFError
 
         monkeypatch.setattr("vastly.remote.run_ssh", fake_ssh)
-        monkeypatch.setattr("vastly.remote.run_scp", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            "vastly.remote._upload", lambda *_a: pytest.fail("uploaded")
+        )
         monkeypatch.setattr("builtins.input", raise_eof)
 
         instances = [_inst(name="1xA100-US")]

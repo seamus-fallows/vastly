@@ -1,18 +1,30 @@
-"""Remote project setup -- SCP setup script and execute."""
+"""Remote project setup -- upload the setup script and run it."""
 
 from __future__ import annotations
 
+import io
 import json
+import os
 import shlex
 import subprocess
+import tarfile
 import time
 from importlib import resources
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
+import vastly
 from vastly import __version__, cyan, dim, gitauth, green, red, yellow
 from vastly.config import Config
 from vastly.instance import Instance
-from vastly.ssh import run_scp, run_ssh, set_forward_agent
+from vastly.ssh import (
+    KNOWN_HOSTS,
+    SSH_SETUP_OPTS,
+    host_key_alias,
+    host_key_changed,
+    run_ssh,
+    set_forward_agent,
+    ssh_program,
+)
 
 # These paths must match setup-remote.sh -- keep in sync
 REMOTE_MARKER_DIR = "~/.vastly/setup"
@@ -21,6 +33,9 @@ REMOTE_MARKER_PATTERN = "~/.vastly/setup/{repo_name}.json"
 # Separator used in combined SSH probe commands (read marker + list markers).
 # Also referenced in tests -- import from here to avoid duplication.
 _PROBE_SEP = "__VASTLY_SEP__"
+
+# Where the setup script and copyFiles are unpacked on the instance
+_UPLOAD_DIR = "/tmp/vastly-setup"
 
 
 def _check_repo_mismatch(repo_name: str, setup_files: list[str]) -> list[str]:
@@ -33,6 +48,73 @@ def _check_repo_mismatch(repo_name: str, setup_files: list[str]) -> list[str]:
         for f in setup_files
         if f.endswith(".json") and f.removesuffix(".json") != repo_name
     ]
+
+
+def _for_instance(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    """Upload files as the SSH user's own, with plain modes (Windows has no Unix ones)."""
+    info.uid = info.gid = 0
+    info.uname = info.gname = "root"
+    info.mode = 0o755 if info.isdir() or info.mode & 0o111 else 0o644
+    return info
+
+
+def _upload(host: str, script: Path, files: list[tuple[Path, str]]) -> bool:
+    """Send the setup script and copyFiles to _UPLOAD_DIR in one SSH connection.
+
+    *files* are (local path, path in the repo) pairs. Everything goes as one tar
+    stream, so large copyFiles entries aren't held in memory.
+    """
+    remote = (
+        f"rm -rf {_UPLOAD_DIR} && mkdir -p {_UPLOAD_DIR} && tar -xf - -C {_UPLOAD_DIR}"
+    )
+    vastly.verbose(f"ssh {host}: {remote}")
+    proc = subprocess.Popen(
+        [ssh_program("ssh"), *SSH_SETUP_OPTS, host, remote],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+    )
+    try:
+        with tarfile.open(fileobj=proc.stdin, mode="w|", dereference=True) as tar:
+            # Unix line endings, even if git checked the script out with CRLF
+            data = script.read_bytes().replace(b"\r\n", b"\n")
+            info = tarfile.TarInfo("setup-remote.sh")
+            info.size, info.mtime = len(data), time.time()
+            tar.addfile(_for_instance(info), io.BytesIO(data))
+            for local, rel in files:
+                tar.add(local, arcname=f"files/{rel}", filter=_for_instance)
+    except OSError as e:
+        if e.filename:  # a copyFiles entry couldn't be read
+            print(red(f"  Can't read {e.filename}: {e.strerror}"))
+        # Otherwise ssh gave up early, and its error is already on screen
+    finally:
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
+    try:
+        return proc.wait(timeout=60) == 0
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return False
+
+
+def _copy_files(
+    entries: list[str], project_dir: Path | None, label: str
+) -> list[tuple[Path, str]]:
+    """The copyFiles entries to upload, as (local path, path in the repo) pairs."""
+    if not project_dir:
+        return []
+    files = []
+    for entry in entries:
+        rel = entry.replace("\\", "/").rstrip("/")
+        local = project_dir / rel
+        if not Path(os.path.normpath(local)).is_relative_to(project_dir):
+            print(yellow(f"  {label}: copyFiles: {rel} is outside the repo, skipping"))
+        elif not local.exists():
+            print(yellow(f"  {label}: copyFiles: {rel} not found locally, skipping"))
+        else:
+            files.append((local, rel))
+    return files
 
 
 def _add_deploy_key(
@@ -126,10 +208,21 @@ def setup_instances(
             if marker.returncode == 0:
                 reachable = True
                 break
+            if host_key_changed(marker.stderr):
+                break
             if attempt < 3:
                 print(yellow(f" retry {attempt + 1}/3..."), end="", flush=True)
                 time.sleep(5)
 
+        if not reachable and host_key_changed(marker.stderr):
+            print(red(" its SSH host key has changed, so vastly won't connect."))
+            print(
+                red(
+                    "  If you recycled or rebuilt the instance, remove the old key and try again:\n"
+                    f'    ssh-keygen -R {host_key_alias(inst.id)} -f "{KNOWN_HOSTS}"'
+                )
+            )
+            continue
         if not reachable:
             print(
                 red(
@@ -258,11 +351,9 @@ def setup_instances(
                 )
             )
 
-        scp_result = run_scp(
-            str(setup_script), f"{name}:/tmp/_vastly-setup.sh", setup=True
-        )
-        if scp_result.returncode != 0:
-            print(red(f"  {label}: failed to copy setup script"))
+        files = _copy_files(config["copyFiles"], project_dir, label)
+        if not _upload(name, setup_script, files):
+            print(red(f"  {label}: failed to upload the setup files"))
             continue
 
         setup_args = [
@@ -278,11 +369,15 @@ def setup_instances(
         ] + config["postInstall"]
 
         quoted = " ".join(shlex.quote(a) for a in setup_args)
+        # copyFiles go into the repo once setup has cloned it
+        repo_dir = shlex.quote(f"{config['workspace']}/{repo_name}")
         remote_cmd = (
-            # SCP from Windows preserves CRLF; strip carriage returns for bash
-            "sed -i 's/\\r$//' /tmp/_vastly-setup.sh && "
-            f"bash /tmp/_vastly-setup.sh {quoted}; "
-            "e=$?; rm -f /tmp/_vastly-setup.sh; exit $e"
+            f"bash {_UPLOAD_DIR}/setup-remote.sh {quoted}; e=$?; "
+            f"if [ $e -eq 0 ] && [ -d {_UPLOAD_DIR}/files ]; then "
+            f"echo ':: Copying copyFiles into '{repo_dir}; "
+            f"cp -a {_UPLOAD_DIR}/files/. {repo_dir}/ "
+            "|| echo ':: [WARN] Copying copyFiles failed' >&2; fi; "
+            f"rm -rf {_UPLOAD_DIR}; exit $e"
         )
 
         result = run_ssh(name, remote_cmd, setup=True, stream=True)
@@ -297,41 +392,6 @@ def setup_instances(
             for host in (inst.name, inst.alias):
                 if host:
                     set_forward_agent(host, forward)
-
-        # Copy non-git-tracked files to the remote instance
-        copy_files = config["copyFiles"]
-        if copy_files and project_dir:
-            remote_base = f"{config['workspace']}/{repo_name}"
-            for entry in copy_files:
-                rel_path = entry.replace("\\", "/").rstrip("/")
-                local_path = project_dir / rel_path
-                if not local_path.exists():
-                    print(
-                        yellow(
-                            f"  {label}: copyFiles: {rel_path} not found locally, skipping"
-                        )
-                    )
-                    continue
-                print(cyan(f"  {label}: copying {rel_path}"))
-                # Ensure parent directory exists on remote (use PurePosixPath
-                # so we get forward slashes even when running on Windows)
-                parent_rel = str(PurePosixPath(rel_path).parent)
-                remote_parent = (
-                    remote_base if parent_rel == "." else f"{remote_base}/{parent_rel}"
-                )
-                if parent_rel != ".":
-                    run_ssh(name, f"mkdir -p {shlex.quote(remote_parent)}")
-                # Directories go *into* their parent, so re-running setup (vst -f)
-                # doesn't nest a second copy inside the first
-                is_dir = local_path.is_dir()
-                remote_dest = (
-                    f"{name}:{remote_parent}/"
-                    if is_dir
-                    else f"{name}:{remote_base}/{rel_path}"
-                )
-                cp = run_scp(str(local_path), remote_dest, setup=True, recursive=is_dir)
-                if cp.returncode != 0:
-                    print(yellow(f"  {label}: failed to copy {rel_path}"))
 
         print(green(f"  {label}: done."))
         success_names.append(name)

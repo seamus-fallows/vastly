@@ -1,19 +1,19 @@
 """Integration tests requiring a live Vast.ai instance.
 
-These tests verify the full pipeline against real infrastructure.
-They require:
-  - vastai CLI installed and configured (vastai set api-key <key>)
+These tests verify the full pipeline against real infrastructure, and
+rewrite your real SSH configs in ~/.ssh/vast.d. They require:
+  - A Vast.ai API key (vst asks for one on first run)
   - At least one running Vast.ai instance
   - SSH agent with appropriate keys loaded
 
-Run with:
-    pytest tests/test_integration.py -v
+They're skipped unless you ask for them:
+    VASTLY_INTEGRATION=1 pytest tests/test_integration.py -v
 
 Remote setup tests (TestRemoteSetup) modify remote state -- they clone a
 repo, write markers, patch bashrc, and set git identity. These are skipped
 by default. Run them on a disposable instance with:
 
-    VASTLY_DESTRUCTIVE=1 pytest tests/test_integration.py -v
+    VASTLY_INTEGRATION=1 VASTLY_DESTRUCTIVE=1 pytest tests/test_integration.py -v
 
 Cost: requires an active Vast.ai instance. These tests do NOT create or
 destroy instances -- they use whatever is currently running.
@@ -23,33 +23,24 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from vastly.config import DEFAULTS
-from vastly.instance import fetch_instances, sync_instances
+from vastly.instance import sync_instances
 from vastly.ssh import SSH_CONFIG_DIR, run_ssh
+from vastly.vast import list_instances, saved_key
 
-
-def _vastai_configured() -> bool:
-    """Check if the vastai CLI is installed and has an API key."""
-    if not shutil.which("vastai"):
-        return False
-    # vastai stores the key in different locations depending on version/platform
-    key_locations = [
-        Path.home() / ".vast_api_key",
-        Path.home() / ".config" / "vastai" / "vast_api_key",
-    ]
-    return any(p.exists() for p in key_locations)
-
-
-pytestmark = pytest.mark.skipif(
-    not _vastai_configured(),
-    reason="vastai CLI not configured -- run: pip install vastai && vastai set api-key <key>",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        "VASTLY_INTEGRATION" not in os.environ,
+        reason="Uses your Vast.ai account. Run with: VASTLY_INTEGRATION=1 pytest tests/test_integration.py",
+    ),
+    pytest.mark.skipif(
+        not saved_key(), reason="No Vast.ai API key -- run vst once to enter one"
+    ),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -99,12 +90,12 @@ def test_repo():
 class TestAPIConnectivity:
     """Verify that the Vast.ai API is reachable and returns valid data."""
 
-    def test_fetch_returns_list(self):
-        result = fetch_instances()
-        assert isinstance(result, list), "fetch_instances should return a list"
+    def test_list_returns_list(self):
+        result = list_instances()
+        assert isinstance(result, list), "list_instances should return a list"
 
     def test_instances_have_expected_schema(self):
-        instances = fetch_instances()
+        instances = list_instances()
         if not instances:
             pytest.skip("No instances returned by API")
         required_keys = {"id", "gpu_name", "cur_state"}
@@ -164,7 +155,7 @@ class TestRemoteEnvironment:
 
 @pytest.mark.skipif(
     "VASTLY_DESTRUCTIVE" not in os.environ,
-    reason="Modifies remote state. Run with: VASTLY_DESTRUCTIVE=1 pytest tests/test_integration.py",
+    reason="Modifies remote state. Run with: VASTLY_INTEGRATION=1 VASTLY_DESTRUCTIVE=1 pytest tests/test_integration.py",
 )
 class TestRemoteSetup:
     """Test the full setup pipeline on a real instance.

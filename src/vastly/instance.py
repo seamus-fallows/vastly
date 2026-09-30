@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,7 +11,7 @@ from typing import Any
 import vastly
 from vastly import dim, gitauth
 from vastly.config import Config
-from vastly.errors import APIError, VastlyError
+from vastly.errors import VastlyError
 from vastly.ssh import (
     SSH_CONFIG_DIR,
     ensure_ssh_include,
@@ -20,6 +19,7 @@ from vastly.ssh import (
     prune_ssh_configs,
     write_ssh_config,
 )
+from vastly.vast import list_instances
 
 
 @dataclass
@@ -69,40 +69,28 @@ NO_INSTANCES_MSG = (
 )
 
 
-def fetch_instances() -> list[dict[str, Any]]:
-    """Call vastai CLI and return raw instance data for all instances.
+def ssh_address(inst: dict[str, Any]) -> tuple[str, int] | None:
+    """Where to SSH to a running instance: (host, port), or None if it's not ready.
 
-    Raises APIError if the API is unreachable or returns invalid data.
+    Prefers the instance's own SSH port, and falls back to Vast.ai's SSH proxy
+    for instances without one.
     """
+    ip = str(inst.get("public_ipaddr") or "").strip()
     try:
-        result = subprocess.run(
-            ["vastai", "show", "instances", "--raw"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=30,
+        port = int(inst["ports"]["22/tcp"][0]["HostPort"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        port = None
+    if ip and port:
+        return ip, port
+    # The proxy address exists from the start, so wait for the container too
+    proxy_host = str(inst.get("ssh_host") or "").strip()
+    proxy_port = str(inst.get("ssh_port") or "")
+    if inst.get("actual_status") == "running" and proxy_host and proxy_port.isdigit():
+        vastly.verbose(
+            f"Instance {inst.get('id')} has no SSH port: using Vast.ai's proxy"
         )
-    except subprocess.TimeoutExpired:
-        raise APIError("vastai command timed out (network issue or Vast.ai outage).")
-    if result.returncode != 0:
-        if result.stderr.strip():
-            raise APIError(f"vastai: {result.stderr.strip()}")
-        raise APIError(
-            "vastai command failed (missing API key, network issue, or Vast.ai outage). "
-            "Run 'vastai set api-key <key>' if you haven't set one."
-        )
-    try:
-        data = json.loads(result.stdout)
-    except (json.JSONDecodeError, TypeError) as e:
-        raise APIError(
-            "vastai returned invalid data. Try running 'vastai show instances --raw' to debug."
-        ) from e
-
-    if not isinstance(data, list):
-        raise APIError(
-            "vastai returned invalid data. Try running 'vastai show instances --raw' to debug."
-        )
-    return data
+        return proxy_host, int(proxy_port)
+    return None
 
 
 def build_instance_name(inst: dict[str, Any], seen: set[str]) -> str:
@@ -201,7 +189,7 @@ def sync_instances(config: Config) -> list[Instance]:
     ensure_ssh_include()
     SSH_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
-    all_api = fetch_instances()
+    all_api = list_instances()
 
     running = [i for i in all_api if i.get("cur_state") == "running"]
     non_running = [i for i in all_api if i.get("cur_state") != "running"]
@@ -219,11 +207,9 @@ def sync_instances(config: Config) -> list[Instance]:
     for inst in running:
         name = build_instance_name(inst, seen)
 
-        # Get SSH port -- if no ports yet, the instance is still starting
-        try:
-            ssh_port = inst["ports"]["22/tcp"][0]["HostPort"]
-        except (KeyError, IndexError, TypeError):
-            # cur_state says "running" but no ports -- use actual_status
+        address = ssh_address(inst)
+        if address is None:
+            # cur_state says "running" but it can't take SSH yet -- use actual_status
             actual = inst.get("actual_status", "loading")
             status = actual if actual != "running" else "loading"
             results.append(
@@ -238,6 +224,7 @@ def sync_instances(config: Config) -> list[Instance]:
                 )
             )
             continue
+        host, port = address
 
         local_forwards = []
         for pf in config["portForwards"]:
@@ -246,24 +233,17 @@ def sync_instances(config: Config) -> list[Instance]:
             local_forwards.append((local_port, int(pf["remote"])))
 
         forward_agent = gitauth.forward_agent(inst["id"], config["gitAuth"], auth_state)
-        write_ssh_config(
-            name,
-            host=inst["public_ipaddr"],
-            port=int(ssh_port),
-            user=config["sshUser"],
-            key_path=config["sshKeyPath"],
-            local_forwards=local_forwards,
-            forward_agent=forward_agent,
-        )
-
-        ssh_params[inst["id"]] = {
-            "host": inst["public_ipaddr"],
-            "port": int(ssh_port),
+        params = {
+            "inst_id": inst["id"],
+            "host": host,
+            "port": port,
             "user": config["sshUser"],
             "key_path": config["sshKeyPath"],
             "local_forwards": local_forwards,
             "forward_agent": forward_agent,
         }
+        write_ssh_config(name, **params)
+        ssh_params[inst["id"]] = params
 
         results.append(
             Instance(
@@ -313,16 +293,7 @@ def sync_instances(config: Config) -> list[Instance]:
         if alias:
             r.alias = alias
             if r.status == "running" and r.id in ssh_params:
-                params = ssh_params[r.id]
-                write_ssh_config(
-                    alias,
-                    host=params["host"],
-                    port=params["port"],
-                    user=params["user"],
-                    key_path=params["key_path"],
-                    local_forwards=params["local_forwards"],
-                    forward_agent=params["forward_agent"],
-                )
+                write_ssh_config(alias, **ssh_params[r.id])
 
     # Prune stale SSH configs (ones we didn't just write)
     written_configs = {

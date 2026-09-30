@@ -17,3 +17,7 @@ class APIError(VastlyError):
     """Vast.ai API unreachable or returned an error."""
 
     exit_code = 3
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status  # the HTTP status, when Vast.ai answered

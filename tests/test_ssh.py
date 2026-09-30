@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import socket
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 
+import vastly.ssh
 from vastly.ssh import (
     clear_ssh_configs,
     ensure_ssh_include,
     find_available_port,
+    forget_host_key,
+    host_key_changed,
     is_port_available,
+    run_ssh,
     set_forward_agent,
+    ssh_program,
     write_ssh_config,
 )
 
@@ -51,6 +55,7 @@ class TestSetForwardAgent:
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
         write_ssh_config(
             name,
+            inst_id=1,
             host="10.0.0.1",
             port=22,
             user="root",
@@ -84,6 +89,7 @@ class TestSshConfig:
 
         write_ssh_config(
             "1xrtx4090-tw",
+            inst_id=1,
             host="192.168.1.1",
             port=22222,
             user="root",
@@ -98,14 +104,12 @@ class TestSshConfig:
         assert "Port 22222" in content
         assert "User root" in content
         assert "ForwardAgent yes" in content
-        assert "StrictHostKeyChecking no" in content
-        expected_null = "NUL" if sys.platform == "win32" else "/dev/null"
-        assert f"UserKnownHostsFile {expected_null}" in content
 
     def test_forward_agent_can_be_disabled(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
         write_ssh_config(
             "gpu",
+            inst_id=1,
             host="10.0.0.1",
             port=22,
             user="root",
@@ -122,6 +126,7 @@ class TestSshConfig:
 
         write_ssh_config(
             "test",
+            inst_id=1,
             host="10.0.0.1",
             port=22,
             user="root",
@@ -130,13 +135,14 @@ class TestSshConfig:
         )
 
         content = (tmp_path / "test").read_text()
-        assert "IdentityFile C:\\Users\\me\\.ssh\\id_rsa" in content
+        assert 'IdentityFile "C:/Users/me/.ssh/id_rsa"' in content
 
     def test_includes_local_forward(self, tmp_path, monkeypatch):
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
 
         write_ssh_config(
             "test",
+            inst_id=1,
             host="10.0.0.1",
             port=22,
             user="root",
@@ -152,6 +158,7 @@ class TestSshConfig:
 
         write_ssh_config(
             "test",
+            inst_id=1,
             host="10.0.0.1",
             port=22,
             user="root",
@@ -167,6 +174,7 @@ class TestSshConfig:
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
         write_ssh_config(
             "test",
+            inst_id=1,
             host="10.0.0.1",
             port=22,
             user="root",
@@ -180,6 +188,7 @@ class TestSshConfig:
         monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
         write_ssh_config(
             "test",
+            inst_id=1,
             host="10.0.0.1",
             port=22,
             user="root",
@@ -188,6 +197,101 @@ class TestSshConfig:
         )
         content = (tmp_path / "test").read_text()
         assert "LocalForward" not in content
+
+
+class TestHostKeys:
+    """Host keys are trusted on first use and checked after, per instance."""
+
+    def _config(self, tmp_path, monkeypatch, name, inst_id, host):
+        monkeypatch.setattr("vastly.ssh.SSH_CONFIG_DIR", tmp_path)
+        write_ssh_config(
+            name,
+            inst_id=inst_id,
+            host=host,
+            port=22,
+            user="root",
+            key_path=None,
+            local_forwards=[],
+        )
+        return (tmp_path / name).read_text()
+
+    def test_checked_under_the_instance_id_in_vastlys_own_file(
+        self, tmp_path, monkeypatch
+    ):
+        content = self._config(tmp_path, monkeypatch, "gpu", 42, "10.0.0.1")
+
+        known_hosts = str(vastly.ssh.KNOWN_HOSTS).replace("\\", "/")
+        assert "HostKeyAlias vastly-42" in content
+        assert f'UserKnownHostsFile "{known_hosts}"' in content
+        assert "StrictHostKeyChecking accept-new" in content
+        assert "StrictHostKeyChecking no" not in content
+
+    def test_same_instance_keeps_its_key_across_names_and_addresses(
+        self, tmp_path, monkeypatch
+    ):
+        first = self._config(tmp_path, monkeypatch, "gpu", 42, "10.0.0.1")
+        alias = self._config(tmp_path, monkeypatch, "train", 42, "ssh4.vast.ai")
+        other = self._config(tmp_path, monkeypatch, "other", 7, "10.0.0.1")
+
+        assert "HostKeyAlias vastly-42" in first
+        assert "HostKeyAlias vastly-42" in alias
+        assert "HostKeyAlias vastly-7" in other
+
+    def test_forget_removes_only_that_instance(self, tmp_path, monkeypatch):
+        known_hosts = tmp_path / "known_hosts"
+        known_hosts.write_text(
+            "vastly-4 ssh-ed25519 AAAA4\n"
+            "vastly-42 ssh-ed25519 AAAA42\n"
+            "vastly-42 ecdsa-sha2-nistp256 BBBB42\n"
+            "vastly-420 ssh-ed25519 AAAA420\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("vastly.ssh.KNOWN_HOSTS", known_hosts)
+
+        forget_host_key(42)
+
+        assert known_hosts.read_text(encoding="utf-8") == (
+            "vastly-4 ssh-ed25519 AAAA4\nvastly-420 ssh-ed25519 AAAA420\n"
+        )
+
+    def test_forget_without_a_file_is_a_no_op(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("vastly.ssh.KNOWN_HOSTS", tmp_path / "known_hosts")
+        forget_host_key(42)
+        assert not (tmp_path / "known_hosts").exists()
+
+    def test_detects_ssh_refusing_a_changed_key(self):
+        assert host_key_changed(
+            "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\n"
+            "Host key verification failed.\r\n"
+        )
+        assert not host_key_changed("Connection refused")
+
+
+class TestSshProgram:
+    """On Windows, vastly runs Windows' own OpenSSH, like VS Code does."""
+
+    def test_prefers_windows_openssh(self, tmp_path, monkeypatch):
+        (tmp_path / "ssh.exe").write_text("")
+        monkeypatch.setattr("vastly.ssh._WINDOWS_OPENSSH", tmp_path)
+
+        assert ssh_program("ssh") == str(tmp_path / "ssh.exe")
+        assert ssh_program("scp") == "scp"  # not installed there: use PATH
+
+    def test_uses_path_elsewhere(self):
+        assert ssh_program("ssh") == "ssh"
+
+    def test_run_ssh_uses_it(self, tmp_path, monkeypatch):
+        (tmp_path / "ssh.exe").write_text("")
+        monkeypatch.setattr("vastly.ssh._WINDOWS_OPENSSH", tmp_path)
+        seen = []
+
+        def fake_run(cmd, **kwargs):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr("vastly.ssh.subprocess.run", fake_run)
+        run_ssh("gpu", "true")
+        assert seen[0][0] == str(tmp_path / "ssh.exe")
 
 
 class TestEnsureSshInclude:
@@ -314,8 +418,6 @@ class TestOutputDecoding:
     """SSH output is decoded as UTF-8, and timeouts always return text."""
 
     def test_run_ssh_decodes_utf8(self, monkeypatch):
-        from vastly.ssh import run_ssh
-
         seen = {}
 
         def fake_run(cmd, **kwargs):
@@ -329,7 +431,7 @@ class TestOutputDecoding:
     @pytest.mark.parametrize("output", [b"partial \xc3\xa9", "partial é"])
     def test_timeout_output_is_text(self, monkeypatch, output):
         """TimeoutExpired carries bytes on macOS/Linux even with text=True."""
-        from vastly.ssh import run_scp, run_ssh
+        from vastly.ssh import run_scp
 
         def hang(cmd, **kwargs):
             raise subprocess.TimeoutExpired(cmd, 30, output=output, stderr=None)

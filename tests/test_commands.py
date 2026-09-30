@@ -11,7 +11,7 @@ import pytest
 from conftest import make_test_config
 from conftest import make_test_instance as _inst
 
-from vastly.errors import VastlyError
+from vastly.errors import APIError, VastlyError
 from vastly.instance import validate_alias
 
 # ── Shared helpers ───────────────────────────────────────────────────
@@ -23,39 +23,29 @@ _MINIMAL_CONFIG = make_test_config(portForwards=[])
 
 
 class TestStopDestroy:
-    """Test cmd_stop, cmd_destroy, and _vastai_action."""
+    """Test cmd_stop, cmd_destroy, and _stop."""
 
-    def test_vastai_action_stop(self, monkeypatch):
-        from vastly.commands import _vastai_action
+    def test_stop_stops_the_instance(self, monkeypatch, capsys):
+        from vastly.commands import _stop
 
-        captured_cmd = []
+        stopped = []
+        monkeypatch.setattr("vastly.commands.vast.stop_instance", stopped.append)
 
-        def fake_run(cmd, **_kwargs):
-            captured_cmd.extend(cmd)
-            return subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        _stop(_inst(name="1xRTX4090-TW", id=12345))
 
-        monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
+        assert stopped == [12345]
+        assert "Stopped 1xRTX4090-TW" in capsys.readouterr().out
 
-        inst = _inst(name="1xRTX4090-TW", id=12345)
-        _vastai_action("stop", inst)
+    def test_stop_failure_names_the_instance(self, monkeypatch):
+        from vastly.commands import _stop
 
-        assert "vastai" in captured_cmd
-        assert "stop" in captured_cmd
-        assert "12345" in captured_cmd
+        def refuse(_id):
+            raise APIError("Vast.ai returned HTTP 500: error msg", 500)
 
-    def test_vastai_action_raises_on_failure(self, monkeypatch):
-        from vastly.commands import _vastai_action
+        monkeypatch.setattr("vastly.commands.vast.stop_instance", refuse)
 
-        monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [], 1, stdout="", stderr="error msg"
-            ),
-        )
-
-        inst = _inst(name="test", id=1)
-        with pytest.raises(VastlyError, match="Failed to stop"):
-            _vastai_action("stop", inst)
+        with pytest.raises(APIError, match="Failed to stop test: .*error msg"):
+            _stop(_inst(name="test", id=1))
 
     def test_confirm_yes(self, monkeypatch):
         from vastly.commands import _confirm
@@ -204,7 +194,7 @@ class TestCmdStart:
 
         started = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_start",
+            "vastly.commands._start",
             lambda inst: (started.append(inst.id), False)[1],
         )
 
@@ -225,7 +215,7 @@ class TestCmdStart:
                 _inst(name="b", id=2, status="stopped"),
             ],
         )
-        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("vastly.commands._start", lambda inst: False)
 
         connect_called = []
         monkeypatch.setattr(
@@ -252,13 +242,13 @@ class TestCmdStart:
 
         started = []
         monkeypatch.setattr(
-            "vastly.commands._vastai_start", lambda inst: (started.append(1), False)[1]
+            "vastly.commands._start", lambda inst: (started.append(1), False)[1]
         )
 
         args = argparse.Namespace(name=None, no_connect=True, verbose=False)
         cmd_start(args)
 
-        assert started == []  # Should not call vastai_start for loading state
+        assert started == []  # a loading instance is already starting
 
     def test_timeout_raises(self, monkeypatch):
         import vastly.commands
@@ -273,7 +263,7 @@ class TestCmdStart:
                 _inst(name="b", id=2, status="stopped"),
             ],
         )
-        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("vastly.commands._start", lambda inst: False)
 
         # Make polling instant and always return "loading" (not queued, so
         # the normal timeout applies)
@@ -281,10 +271,8 @@ class TestCmdStart:
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 5)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 5)
         monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [], 0, stdout='{"cur_state": "loading"}', stderr=""
-            ),
+            "vastly.commands.vast.get_instance",
+            lambda _id: {"id": _id, "cur_state": "loading"},
         )
 
         args = argparse.Namespace(name=None, no_connect=False, verbose=False)
@@ -304,8 +292,8 @@ class TestCmdStart:
                 _inst(name="b", id=2, status="stopped"),
             ],
         )
-        # _vastai_start returns True (queued)
-        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: True)
+        # _start returns True (queued)
+        monkeypatch.setattr("vastly.commands._start", lambda inst: True)
         monkeypatch.setattr("time.sleep", lambda _: None)
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 5)
@@ -313,20 +301,13 @@ class TestCmdStart:
         # API still says stopped (queued), then transitions to running
         poll_count = [0]
 
-        def fake_run(*_a, **_kw):
+        def fake_get(inst_id):
             poll_count[0] += 1
             if poll_count[0] == 1:
-                return subprocess.CompletedProcess(
-                    [], 0, stdout='{"cur_state": "stopped"}', stderr=""
-                )
-            return subprocess.CompletedProcess(
-                [],
-                0,
-                stdout='{"cur_state": "running", "actual_status": "running"}',
-                stderr="",
-            )
+                return {"id": inst_id, "cur_state": "stopped"}
+            return {"id": inst_id, "cur_state": "running", "actual_status": "running"}
 
-        monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
+        monkeypatch.setattr("vastly.commands.vast.get_instance", fake_get)
         monkeypatch.setattr("vastly.commands._do_connect", lambda **kw: None)
 
         args = argparse.Namespace(name=None, no_connect=False, verbose=False)
@@ -411,15 +392,13 @@ class TestCmdStopLifecycle:
             ],
         )
 
-        actions = []
-        monkeypatch.setattr(
-            "vastly.commands._vastai_action", lambda a, i: actions.append(a)
-        )
+        stopped_ids = []
+        monkeypatch.setattr("vastly.commands._stop", lambda i: stopped_ids.append(i.id))
 
         args = argparse.Namespace(name="a", all=False, yes=True, verbose=False)
         cmd_stop(args)
 
-        assert actions == ["stop"]
+        assert stopped_ids == [1]
 
     def test_stop_all_mixed_states(self, monkeypatch):
         from vastly.commands import cmd_stop
@@ -438,9 +417,7 @@ class TestCmdStopLifecycle:
         monkeypatch.setattr("builtins.input", lambda _: "y")
 
         stopped_ids = []
-        monkeypatch.setattr(
-            "vastly.commands._vastai_action", lambda a, i: stopped_ids.append(i.id)
-        )
+        monkeypatch.setattr("vastly.commands._stop", lambda i: stopped_ids.append(i.id))
 
         args = argparse.Namespace(name=None, all=True, yes=False, verbose=False)
         cmd_stop(args)
@@ -486,47 +463,40 @@ class TestCmdStopLifecycle:
             cmd_stop(args)
 
 
-# ── TestVastaiStart ──────────────────────────────────────────────────
+# ── TestStart ───────────────────────────────────────────────────────
 
 
-class TestVastaiStart:
-    """Test _vastai_start detects queued vs immediate starts."""
+class TestStart:
+    """Test _start reports queued vs immediate starts."""
 
     def test_immediate_start(self, monkeypatch, capsys):
-        from vastly.commands import _vastai_start
+        from vastly.commands import _start
 
-        monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [], 0, stdout="starting instance", stderr=""
-            ),
-        )
+        monkeypatch.setattr("vastly.commands.vast.start_instance", lambda _id: False)
 
-        queued = _vastai_start(_inst(name="test", id=1))
-
-        assert queued is False
-        output = capsys.readouterr().out
-        assert "Started" in output
+        assert _start(_inst(name="test", id=1)) is False
+        assert "Started" in capsys.readouterr().out
 
     def test_queued_start(self, monkeypatch, capsys):
-        from vastly.commands import _vastai_start
+        from vastly.commands import _start
 
-        monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [],
-                0,
-                stdout="Required resources are currently unavailable, state change queued.",
-                stderr="",
-            ),
-        )
+        monkeypatch.setattr("vastly.commands.vast.start_instance", lambda _id: True)
 
-        queued = _vastai_start(_inst(name="test", id=1))
-
-        assert queued is True
+        assert _start(_inst(name="test", id=1)) is True
         output = capsys.readouterr().out
         assert "Queued" in output
         assert "waiting for resources" in output
+
+    def test_failure_names_the_instance(self, monkeypatch):
+        from vastly.commands import _start
+
+        def refuse(_id):
+            raise APIError("Couldn't reach Vast.ai (timed out).")
+
+        monkeypatch.setattr("vastly.commands.vast.start_instance", refuse)
+
+        with pytest.raises(APIError, match="Failed to start gpu: .*timed out"):
+            _start(_inst(name="gpu"))
 
 
 # ── TestCmdConfig ────────────────────────────────────────────────────
@@ -537,7 +507,7 @@ class TestCmdConfig:
 
     @pytest.fixture(autouse=True)
     def _fake_account(self, monkeypatch):
-        # cmd_config asks vastai which account is active -- never hit the real API
+        # cmd_config asks Vast.ai which account is active -- never hit the real API
         monkeypatch.setattr(
             "vastly.commands._vast_account", lambda: "alice (alice@example.com)"
         )
@@ -693,85 +663,68 @@ class TestGitAuthPreview:
 
 
 class TestVastAccount:
-    """Test _format_account and _vast_account (which account the API key belongs to)."""
-
-    @pytest.mark.parametrize(
-        "user, expected",
-        [
-            (
-                {"username": "moirai", "email": "team@example.com", "is_team": True},
-                "moirai (team@example.com, team)",
-            ),
-            (
-                {"username": "alice", "email": "alice@example.com", "is_team": False},
-                "alice (alice@example.com)",
-            ),
-            ({"email": "alice@example.com"}, "alice@example.com"),
-            ({"username": "alice"}, "alice"),
-            ({"id": 123}, None),
-        ],
-    )
-    def test_format_account(self, user, expected):
-        from vastly.commands import _format_account
-
-        assert _format_account(user) == expected
-
-    def _patch_vastai(self, monkeypatch, *, installed=True, run=None):
-        monkeypatch.setattr(
-            "vastly.commands.shutil.which",
-            lambda name: "/usr/bin/vastai" if installed else None,
-        )
-        if run:
-            monkeypatch.setattr("vastly.commands.subprocess.run", run)
+    """Test _vast_account (which account the API key belongs to)."""
 
     def test_success(self, monkeypatch):
         from vastly.commands import _vast_account
 
         user = {"username": "alice", "email": "alice@example.com", "api_key": "secret"}
+        monkeypatch.setattr("vastly.commands.vast.current_user", lambda: user)
 
-        def fake_run(cmd, **_kwargs):
-            assert cmd == ["vastai", "show", "user", "--raw"]
-            return subprocess.CompletedProcess(
-                cmd, 0, stdout=json.dumps(user), stderr=""
-            )
-
-        self._patch_vastai(monkeypatch, run=fake_run)
         result = _vast_account()
+
         assert result == "alice (alice@example.com)"
         assert "secret" not in result
 
-    def test_vastai_not_installed(self, monkeypatch):
+    def test_no_key_does_not_ask(self, monkeypatch):
         from vastly.commands import _vast_account
 
-        self._patch_vastai(monkeypatch, installed=False)
-        assert "not installed" in _vast_account()
+        monkeypatch.delenv("VAST_API_KEY")
+        monkeypatch.setattr("vastly.commands.vast.ask_for_key", pytest.fail)
 
-    def test_command_fails(self, monkeypatch):
+        assert "no API key" in _vast_account()
+
+    def test_api_error(self, monkeypatch):
         from vastly.commands import _vast_account
 
-        self._patch_vastai(
-            monkeypatch,
-            run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "401"),
-        )
-        assert "vastai set api-key" in _vast_account()
+        def rejected():
+            raise APIError("Vast.ai refused the API key (HTTP 401: bad key).", 401)
 
-    def test_invalid_json(self, monkeypatch):
+        monkeypatch.setattr("vastly.commands.vast.current_user", rejected)
+
+        assert "refused the API key" in _vast_account()
+
+    def test_account_without_a_name(self, monkeypatch):
         from vastly.commands import _vast_account
 
-        self._patch_vastai(
-            monkeypatch,
-            run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, "oops", ""),
-        )
+        monkeypatch.setattr("vastly.commands.vast.current_user", lambda: {"id": 1})
+
         assert "unknown" in _vast_account()
 
-    def test_timeout(self, monkeypatch):
-        from vastly.commands import _vast_account
 
-        def fake_run(cmd, **kwargs):
-            raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+class TestSetApiKey:
+    """vst config --api-key asks for a new key instead of showing the config."""
 
-        self._patch_vastai(monkeypatch, run=fake_run)
-        assert "timed out" in _vast_account()
+    def test_asks_for_a_key(self, monkeypatch, capsys):
+        from vastly.commands import cmd_config
+
+        asked = []
+        monkeypatch.setattr("vastly.commands.vast.ask_for_key", lambda: asked.append(1))
+        monkeypatch.delenv("VAST_API_KEY")
+
+        cmd_config(argparse.Namespace(api_key=True, verbose=False))
+
+        assert asked == [1]
+        assert "config:" not in capsys.readouterr().out
+
+    def test_warns_when_the_environment_overrides_it(self, monkeypatch, capsys):
+        from vastly.commands import cmd_config
+
+        monkeypatch.setattr("vastly.commands.vast.ask_for_key", lambda: None)
+
+        cmd_config(argparse.Namespace(api_key=True, verbose=False))
+
+        assert "VAST_API_KEY is set" in capsys.readouterr().out
 
 
 # ── TestConnectStoppedInstance ────────────────────────────────────────
@@ -835,7 +788,7 @@ class TestConnectStoppedInstance:
             ],
         )
         monkeypatch.setattr(
-            "vastly.commands._vastai_start",
+            "vastly.commands._start",
             lambda inst: (started_ids.append(inst.id), False)[1],
         )
         monkeypatch.setattr(
@@ -1098,20 +1051,15 @@ class TestCmdStopIntegration:
             ],
         )
 
-        action_calls = []
-        monkeypatch.setattr(
-            "vastly.commands._vastai_action",
-            lambda action, inst: action_calls.append((action, inst)),
-        )
+        stopped = []
+        monkeypatch.setattr("vastly.commands._stop", stopped.append)
 
         args = argparse.Namespace(
             command="stop", name=None, all=False, yes=True, verbose=False
         )
         cmd_stop(args)
 
-        assert len(action_calls) == 1
-        assert action_calls[0][0] == "stop"
-        assert action_calls[0][1].id == 12345
+        assert [inst.id for inst in stopped] == [12345]
 
     def test_stop_named_instance(self, monkeypatch):
         from vastly.commands import cmd_stop
@@ -1127,21 +1075,15 @@ class TestCmdStopIntegration:
             ],
         )
 
-        action_calls = []
-        monkeypatch.setattr(
-            "vastly.commands._vastai_action",
-            lambda action, inst: action_calls.append((action, inst)),
-        )
+        stopped = []
+        monkeypatch.setattr("vastly.commands._stop", stopped.append)
 
         args = argparse.Namespace(
             command="stop", name="test-gpu", all=False, yes=True, verbose=False
         )
         cmd_stop(args)
 
-        assert len(action_calls) == 1
-        assert action_calls[0][0] == "stop"
-        assert action_calls[0][1].name == "test-gpu"
-        assert action_calls[0][1].id == 200
+        assert [(inst.name, inst.id) for inst in stopped] == [("test-gpu", 200)]
 
 
 # ── TestCmdSsh ───────────────────────────────────────────────────────
@@ -1406,7 +1348,7 @@ class TestStartAndResync:
         def fake_sync(config):
             return [running_inst]
 
-        monkeypatch.setattr("vastly.commands._vastai_start", fake_start)
+        monkeypatch.setattr("vastly.commands._start", fake_start)
         monkeypatch.setattr("vastly.commands._poll_for_running", fake_poll)
         monkeypatch.setattr("vastly.commands.sync_instances", fake_sync)
 
@@ -1414,7 +1356,7 @@ class TestStartAndResync:
         all_inst, running = _start_and_resync(to_start, {})
 
         assert started == [100]
-        assert polled == [("100", False)]
+        assert polled == [(100, False)]
         assert len(running) == 1
         assert running[0].name == "1xA100-US"
 
@@ -1423,7 +1365,7 @@ class TestStartAndResync:
 
         polled = []
 
-        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: True)
+        monkeypatch.setattr("vastly.commands._start", lambda inst: True)
         monkeypatch.setattr(
             "vastly.commands._poll_for_running",
             lambda inst_id, display_name="", *, queued=False: polled.append(queued),
@@ -1439,7 +1381,7 @@ class TestStartAndResync:
     def test_raises_when_no_running_after_resync(self, monkeypatch):
         from vastly.commands import _start_and_resync
 
-        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("vastly.commands._start", lambda inst: False)
         monkeypatch.setattr(
             "vastly.commands._poll_for_running", lambda *_a, **_kw: None
         )
@@ -1473,7 +1415,7 @@ class TestYesFlag:
             lambda config: [_inst(name="gpu", id=1)],
         )
         monkeypatch.setattr(
-            "vastly.commands._vastai_destroy",
+            "vastly.commands._destroy",
             lambda inst: destroyed.append(inst.name),
         )
         # _confirm should NOT be called when yes=True
@@ -1511,8 +1453,7 @@ class TestYesFlag:
             ],
         )
         monkeypatch.setattr(
-            "vastly.commands._vastai_action",
-            lambda action, inst: stopped.append(inst.name),
+            "vastly.commands._stop", lambda inst: stopped.append(inst.name)
         )
         # _confirm should NOT be called when yes=True
         monkeypatch.setattr(
@@ -1629,14 +1570,21 @@ class TestCmdConnectNoSetupPath:
         assert ide_calls[0][2] == "/workspace"
 
 
-# ── TestVastaiDestroyCleanup ─────────────────────────────────────────
+# ── TestDestroyCleanup ──────────────────────────────────────────────
 
 
-class TestVastaiDestroyCleanup:
-    """_vastai_destroy should clean up SSH configs and aliases."""
+class TestDestroyCleanup:
+    """_destroy should clean up SSH configs, aliases, and keys."""
+
+    @pytest.fixture(autouse=True)
+    def _destroyed(self, monkeypatch):
+        self.destroyed = []
+        monkeypatch.setattr(
+            "vastly.commands.vast.destroy_instance", self.destroyed.append
+        )
 
     def test_removes_ssh_config_and_alias(self, monkeypatch, tmp_path):
-        from vastly.commands import _vastai_destroy
+        from vastly.commands import _destroy
 
         # Set up fake SSH config dir
         ssh_dir = tmp_path / "vast.d"
@@ -1652,15 +1600,10 @@ class TestVastaiDestroyCleanup:
         aliases_file.write_text('{"42": "train"}', encoding="utf-8")
         monkeypatch.setattr("vastly.instance._ALIASES_FILE", aliases_file)
 
-        # Mock the actual vastai CLI call
-        monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
-        )
-
         inst = _inst(name="gpu-box", id=42, alias="train")
-        _vastai_destroy(inst)
+        _destroy(inst)
 
+        assert self.destroyed == [42]
         # SSH config for the auto-name should be removed
         assert not (ssh_dir / "gpu-box").exists()
         # SSH config for the alias should be removed
@@ -1670,7 +1613,7 @@ class TestVastaiDestroyCleanup:
         assert "42" not in remaining
 
     def test_handles_missing_ssh_configs_gracefully(self, monkeypatch, tmp_path):
-        from vastly.commands import _vastai_destroy
+        from vastly.commands import _destroy
 
         ssh_dir = tmp_path / "vast.d"
         ssh_dir.mkdir()
@@ -1679,32 +1622,45 @@ class TestVastaiDestroyCleanup:
         aliases_file = tmp_path / "aliases.json"
         monkeypatch.setattr("vastly.instance._ALIASES_FILE", aliases_file)
 
-        monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
-        )
-
         # Instance with no alias and no existing SSH config -- should not error
         inst = _inst(name="gpu-box", id=42)
-        _vastai_destroy(inst)  # should complete without error
+        _destroy(inst)  # should complete without error
 
     def test_removes_deploy_keys(self, monkeypatch, tmp_path):
-        from vastly.commands import _vastai_destroy
+        from vastly.commands import _destroy
 
         monkeypatch.setattr("vastly.commands.SSH_CONFIG_DIR", tmp_path)
         monkeypatch.setattr("vastly.instance._ALIASES_FILE", tmp_path / "aliases.json")
-        monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess([], 0, stdout="", stderr=""),
-        )
         removed = []
         monkeypatch.setattr(
             "vastly.commands.gitauth.remove_instance_keys", removed.append
         )
 
-        _vastai_destroy(_inst(name="gpu-box", id=42))
+        _destroy(_inst(name="gpu-box", id=42))
 
         assert removed == [42]
+
+    def test_forgets_host_key(self, monkeypatch):
+        from vastly.commands import _destroy
+
+        forgotten = []
+        monkeypatch.setattr("vastly.commands.forget_host_key", forgotten.append)
+
+        _destroy(_inst(name="gpu-box", id=42))
+
+        assert forgotten == [42]
+
+    def test_failure_leaves_everything_in_place(self, monkeypatch):
+        from vastly.commands import _destroy
+
+        def refuse(_id):
+            raise APIError("Vast.ai returned HTTP 500: busy", 500)
+
+        monkeypatch.setattr("vastly.commands.vast.destroy_instance", refuse)
+        monkeypatch.setattr("vastly.commands.gitauth.remove_instance_keys", pytest.fail)
+
+        with pytest.raises(APIError, match="Failed to destroy gpu-box"):
+            _destroy(_inst(name="gpu-box", id=42))
 
 
 # ── TestCmdSshSmartDispatch ──────────────────────────────────────────
@@ -1815,106 +1771,62 @@ class TestCmdSshSmartDispatch:
 class TestPollForRunningApiFailures:
     """_poll_for_running should surface API errors after consecutive failures."""
 
-    def test_transient_api_failure_recovers(self, monkeypatch):
+    @pytest.fixture(autouse=True)
+    def _fast(self, monkeypatch):
         import vastly.commands
-        from vastly.commands import _poll_for_running
 
         monkeypatch.setattr("time.sleep", lambda _: None)
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 60)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
+        monkeypatch.setattr(vastly.commands, "_MAX_POLL_FAILURES", 3)
 
-        call_count = [0]
+    @staticmethod
+    def _replies(monkeypatch, replies):
+        """Make vast.get_instance return (or raise) each reply in turn."""
+        replies = iter(replies)
 
-        def fake_run(*a, **kw):
-            call_count[0] += 1
-            if call_count[0] <= 2:
-                # First 2 calls fail
-                return subprocess.CompletedProcess(
-                    [], 1, stdout="", stderr="network error"
-                )
-            # Then succeeds
-            return subprocess.CompletedProcess(
-                [],
-                0,
-                stdout='{"cur_state": "running", "actual_status": "running"}',
-                stderr="",
-            )
+        def fake_get(inst_id):
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return {"id": inst_id, **reply}
 
-        monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
+        monkeypatch.setattr("vastly.commands.vast.get_instance", fake_get)
 
-        _poll_for_running("123", "test-gpu")  # should not raise
+    def test_transient_api_failure_recovers(self, monkeypatch):
+        from vastly.commands import _poll_for_running
+
+        down = APIError("Couldn't reach Vast.ai (network error).")
+        running = {"cur_state": "running", "actual_status": "running"}
+        self._replies(monkeypatch, [down, down, running])
+
+        _poll_for_running(123, "test-gpu")  # should not raise
 
     def test_consecutive_api_failures_raises(self, monkeypatch):
-        import vastly.commands
         from vastly.commands import _poll_for_running
 
-        monkeypatch.setattr("time.sleep", lambda _: None)
-        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 60)
-        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
-        monkeypatch.setattr(vastly.commands, "_MAX_POLL_FAILURES", 3)
+        self._replies(monkeypatch, [APIError("API down")] * 3)
 
-        monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [], 1, stdout="", stderr="API down"
-            ),
-        )
-
-        with pytest.raises(VastlyError, match="Cannot reach.*API down"):
-            _poll_for_running("123", "test-gpu")
-
-    def test_consecutive_json_failures_raises(self, monkeypatch):
-        import vastly.commands
-        from vastly.commands import _poll_for_running
-
-        monkeypatch.setattr("time.sleep", lambda _: None)
-        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 60)
-        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
-        monkeypatch.setattr(vastly.commands, "_MAX_POLL_FAILURES", 3)
-
-        monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [], 0, stdout="not json", stderr=""
-            ),
-        )
-
-        with pytest.raises(VastlyError, match="invalid data"):
-            _poll_for_running("123", "test-gpu")
+        with pytest.raises(APIError, match="Gave up waiting for test-gpu: API down"):
+            _poll_for_running(123, "test-gpu")
 
     def test_api_failure_counter_resets_on_success(self, monkeypatch):
-        import vastly.commands
         from vastly.commands import _poll_for_running
 
-        monkeypatch.setattr("time.sleep", lambda _: None)
-        monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 60)
-        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
-        monkeypatch.setattr(vastly.commands, "_MAX_POLL_FAILURES", 3)
+        err = APIError("err")
+        loading = {"cur_state": "loading"}
+        running = {"cur_state": "running", "actual_status": "running"}
+        self._replies(monkeypatch, [err, err, loading, err, err, running])
 
-        call_count = [0]
+        _poll_for_running(123, "test-gpu")  # should not raise
 
-        def fake_run(*a, **kw):
-            call_count[0] += 1
-            if call_count[0] in (1, 2):
-                return subprocess.CompletedProcess([], 1, stdout="", stderr="err")
-            if call_count[0] == 3:
-                # Success but not running yet -- resets counter
-                return subprocess.CompletedProcess(
-                    [], 0, stdout='{"cur_state": "loading"}', stderr=""
-                )
-            if call_count[0] in (4, 5):
-                return subprocess.CompletedProcess([], 1, stdout="", stderr="err")
-            # Finally running
-            return subprocess.CompletedProcess(
-                [],
-                0,
-                stdout='{"cur_state": "running", "actual_status": "running"}',
-                stderr="",
-            )
+    def test_destroyed_instance_stops_the_wait(self, monkeypatch):
+        from vastly.commands import _poll_for_running
 
-        monkeypatch.setattr("vastly.commands.subprocess.run", fake_run)
+        monkeypatch.setattr("vastly.commands.vast.get_instance", lambda _id: None)
 
-        _poll_for_running("123", "test-gpu")  # should not raise
+        with pytest.raises(VastlyError, match="no longer exists"):
+            _poll_for_running(123, "test-gpu")
 
 
 # ── TestDoConnect ────────────────────────────────────────────────────
@@ -2006,20 +1918,15 @@ class TestCmdStartUsesDoConnect:
             "vastly.commands.get_synced_instances",
             lambda _: [_inst(name="gpu", id=1, status="stopped")],
         )
-        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("vastly.commands._start", lambda inst: False)
         monkeypatch.setattr("time.sleep", lambda _: None)
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
 
         # Simulate poll returning running
         monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [],
-                0,
-                stdout='{"cur_state": "running", "actual_status": "running"}',
-                stderr="",
-            ),
+            "vastly.commands.vast.get_instance",
+            lambda _id: {"id": _id, "cur_state": "running", "actual_status": "running"},
         )
 
         connect_kwargs = {}
@@ -2043,19 +1950,14 @@ class TestCmdStartUsesDoConnect:
             "vastly.commands.get_synced_instances",
             lambda _: [_inst(name="gpu", id=1, status="stopped", alias="train")],
         )
-        monkeypatch.setattr("vastly.commands._vastai_start", lambda inst: False)
+        monkeypatch.setattr("vastly.commands._start", lambda inst: False)
         monkeypatch.setattr("time.sleep", lambda _: None)
         monkeypatch.setattr(vastly.commands, "_START_TIMEOUT", 10)
         monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
 
         monkeypatch.setattr(
-            "vastly.commands.subprocess.run",
-            lambda *_a, **_kw: subprocess.CompletedProcess(
-                [],
-                0,
-                stdout='{"cur_state": "running", "actual_status": "running"}',
-                stderr="",
-            ),
+            "vastly.commands.vast.get_instance",
+            lambda _id: {"id": _id, "cur_state": "running", "actual_status": "running"},
         )
 
         connect_kwargs = {}
@@ -2231,47 +2133,11 @@ class TestHttpsUrlTrailingSlash:
         assert suggestion == "git@github.com:user/repo"
 
 
-# ── TestVastaiTimeouts ───────────────────────────────────────────────
-
-
-class TestVastaiTimeouts:
-    """vastai calls give up instead of hanging forever."""
-
-    @staticmethod
-    def _hang(cmd, **kwargs):
-        assert kwargs.get("timeout"), "vastai called without a timeout"
-        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
-
-    def test_action_timeout_raises_vastly_error(self, monkeypatch):
-        from vastly.commands import _vastai_action
-
-        monkeypatch.setattr("vastly.commands.subprocess.run", self._hang)
-        with pytest.raises(VastlyError, match="Timed out trying to stop"):
-            _vastai_action("stop", _inst(name="gpu"))
-
-    def test_start_timeout_raises_vastly_error(self, monkeypatch):
-        from vastly.commands import _vastai_start
-
-        monkeypatch.setattr("vastly.commands.subprocess.run", self._hang)
-        with pytest.raises(VastlyError, match="Timed out trying to start"):
-            _vastai_start(_inst(name="gpu"))
-
-    def test_poll_timeouts_count_as_api_failures(self, monkeypatch):
-        import vastly.commands
-        from vastly.commands import _poll_for_running
-
-        monkeypatch.setattr("time.sleep", lambda _: None)
-        monkeypatch.setattr(vastly.commands, "_START_POLL_INTERVAL", 1)
-        monkeypatch.setattr("vastly.commands.subprocess.run", self._hang)
-        with pytest.raises(VastlyError, match="Cannot reach Vast.ai API"):
-            _poll_for_running("123", "gpu")
-
-
 # ── TestOutputDecoding ───────────────────────────────────────────────
 
 
 class TestOutputDecoding:
-    """git output is UTF-8; vastai writes in the locale encoding when piped."""
+    """git output is UTF-8."""
 
     def _record(self, monkeypatch, stdout=""):
         seen = {}
@@ -2289,14 +2155,6 @@ class TestOutputDecoding:
         seen = self._record(monkeypatch, stdout="/repo\n")
         _git_root()
         assert seen["encoding"] == "utf-8" and seen["errors"] == "replace"
-
-    def test_vastai_output_keeps_locale_encoding(self, monkeypatch):
-        from vastly.commands import _vastai_action
-
-        seen = self._record(monkeypatch)
-        _vastai_action("stop", _inst(name="gpu"))
-        assert "encoding" not in seen
-        assert seen["errors"] == "replace"
 
 
 # ── TestCopyTargets ──────────────────────────────────────────────────

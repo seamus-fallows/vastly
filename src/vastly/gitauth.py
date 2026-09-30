@@ -15,7 +15,8 @@ import subprocess
 from pathlib import Path
 
 import vastly
-from vastly import dim, yellow
+from vastly import dim, vast, yellow
+from vastly.errors import VastlyError
 from vastly.ssh import run_ssh
 
 STATE_FILE = Path.home() / ".vastly" / "deploy-keys.json"
@@ -130,26 +131,10 @@ def delete_deploy_key(repo: str, key_id: int) -> bool:
 
 
 def account_id() -> int | None:
-    """Vast.ai user ID of the account vastai's API key belongs to, or None."""
+    """Vast.ai user ID of the account the API key belongs to, or None."""
     try:
-        result = subprocess.run(
-            ["vastai", "show", "user", "--raw"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=15,
-        )
-        if result.returncode != 0:
-            return None
-        return int(json.loads(result.stdout)["id"])
-    except (
-        FileNotFoundError,
-        subprocess.TimeoutExpired,
-        json.JSONDecodeError,
-        KeyError,
-        TypeError,
-        ValueError,
-    ):
+        return int(vast.current_user()["id"])
+    except (VastlyError, KeyError, TypeError, ValueError):
         return None
 
 

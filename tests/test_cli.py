@@ -18,13 +18,12 @@ class TestCheckPrerequisites:
         monkeypatch.setattr("vastly.commands.check_ide", lambda x: True)
         _check_prerequisites(need_ide=True, ide="code")  # should not raise
 
-    def test_missing_vastai(self, monkeypatch):
+    def test_vastai_cli_not_needed(self, monkeypatch):
         monkeypatch.setattr(
             "shutil.which", lambda x: None if x == "vastai" else f"/usr/bin/{x}"
         )
         monkeypatch.setattr("vastly.commands.check_ide", lambda x: True)
-        with pytest.raises(VastlyError, match="vastai"):
-            _check_prerequisites(need_ide=True, ide="code")
+        _check_prerequisites(need_ide=True, ide="code")  # should not raise
 
     def test_missing_git(self, monkeypatch):
         monkeypatch.setattr(
@@ -61,7 +60,6 @@ class TestCheckPrerequisites:
         with pytest.raises(VastlyError) as exc_info:
             _check_prerequisites(need_ide=True, ide="code")
         msg = str(exc_info.value)
-        assert "vastai" in msg
         assert "git" in msg
         assert "ssh" in msg.lower()
         assert "code" in msg

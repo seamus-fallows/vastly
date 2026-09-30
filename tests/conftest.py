@@ -35,7 +35,7 @@ def make_test_config(**overrides) -> dict:
 def make_api_instance(
     inst_id, state="running", gpu="RTX 4090", geo="Taipei, TW", **extra
 ):
-    """Create a fake API instance dict (as returned by vastai show instances --raw)."""
+    """Create a fake instance dict, as the Vast.ai API returns it."""
     base = {
         "id": inst_id,
         "cur_state": state,
@@ -52,11 +52,12 @@ def make_api_instance(
 
 @pytest.fixture(autouse=True)
 def _isolate_home(request, tmp_path_factory, monkeypatch):
-    """Keep every test away from your real ~/.vastly, ~/.ssh/vast.d, and deploy keys.
+    """Keep every test away from your real ~/.vastly, ~/.ssh/vast.d, Vast.ai key, and deploy keys.
 
-    vastly's files go to a temp home, and any GitHub CLI or account lookup a
-    test hasn't explicitly mocked fails loudly instead of running. The live
-    integration tests (opt-in) are exempt: they need the real SSH configs.
+    vastly's files go to a temp home, and any GitHub CLI or Vast.ai API call a
+    test hasn't explicitly mocked fails loudly instead of running. ssh and scp
+    are the bare names on every OS. The live integration tests (opt-in) are
+    exempt: they need the real SSH configs.
     """
     if request.module.__name__ == "test_integration":
         return
@@ -74,12 +75,18 @@ def _isolate_home(request, tmp_path_factory, monkeypatch):
     monkeypatch.setattr("vastly.gitauth.STATE_FILE", vastly_dir / "deploy-keys.json")
     for module in ("vastly.ssh", "vastly.instance", "vastly.commands"):
         monkeypatch.setattr(f"{module}.SSH_CONFIG_DIR", ssh_dir)
+    monkeypatch.setattr("vastly.ssh.KNOWN_HOSTS", vastly_dir / "known_hosts")
+    monkeypatch.setattr("vastly.ssh._WINDOWS_OPENSSH", None)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("VAST_API_KEY", "test-key")
+    monkeypatch.setattr("vastly.vast.LEGACY_KEY_FILE", home / ".vast_api_key")
 
     def _unmocked(*_args, **_kwargs):
-        raise AssertionError("unmocked GitHub CLI / Vast.ai account call in a test")
+        raise AssertionError("unmocked GitHub CLI / Vast.ai API call in a test")
 
     monkeypatch.setattr("vastly.gitauth._gh", _unmocked)
     monkeypatch.setattr("vastly.gitauth.account_id", _unmocked)
+    monkeypatch.setattr("vastly.vast._send", _unmocked)
 
 
 @pytest.fixture
